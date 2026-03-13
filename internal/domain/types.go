@@ -43,18 +43,29 @@ const (
 	MemberStatusArchived  MemberStatus = "archived"
 )
 
+type Tier struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	QuotaBytes  int64     `json:"quota_bytes"` // monthly quota in bytes; 0 = unlimited
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 type Member struct {
-	ID              string       `json:"id"`
-	UUID            string       `json:"uuid"`
-	Name            string       `json:"name"`
-	Email           string       `json:"email"`
-	Note            string       `json:"note"`
-	Status          MemberStatus `json:"status"`
-	ExpiresAt       *time.Time   `json:"expires_at,omitempty"`
-	QuotaBytesLimit int64        `json:"quota_bytes_limit"`
-	DisabledReason  string       `json:"disabled_reason,omitempty"`
-	CreatedAt       time.Time    `json:"created_at"`
-	UpdatedAt       time.Time    `json:"updated_at"`
+	ID                string       `json:"id"`
+	UUID              string       `json:"uuid"`
+	Name              string       `json:"name"`
+	Email             string       `json:"email"`
+	Note              string       `json:"note"`
+	Status            MemberStatus `json:"status"`
+	ExpiresAt         *time.Time   `json:"expires_at,omitempty"`
+	QuotaBytesLimit   int64        `json:"quota_bytes_limit"`
+	TierID            string       `json:"tier_id,omitempty"`
+	SubscriptionToken string       `json:"subscription_token"`
+	DisabledReason    string       `json:"disabled_reason,omitempty"`
+	CreatedAt         time.Time    `json:"created_at"`
+	UpdatedAt         time.Time    `json:"updated_at"`
 }
 
 type BootstrapToken struct {

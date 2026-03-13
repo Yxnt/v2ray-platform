@@ -441,13 +441,15 @@ func (s *PostgresStore) CreateMember(input CreateMemberInput) (*domain.Member, e
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	_, err := s.db.Exec(
+	// subscription_token defaults to gen_random_uuid() in DB; read it back.
+	err := s.db.QueryRow(
 		`INSERT INTO members (id, uuid, name, email, note, status, quota_bytes_limit, disabled_reason, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		 RETURNING subscription_token`,
 		member.ID, member.UUID, member.Name, member.Email, member.Note,
 		member.Status, member.QuotaBytesLimit, member.DisabledReason,
 		member.CreatedAt, member.UpdatedAt,
-	)
+	).Scan(&member.SubscriptionToken)
 	if err != nil {
 		return nil, mapPQError(err)
 	}
@@ -478,6 +480,9 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 	if input.UUID != nil {
 		member.UUID = *input.UUID
 	}
+	if input.TierID != nil {
+		member.TierID = *input.TierID
+	}
 	if input.Status != nil {
 		member.Status = *input.Status
 	}
@@ -494,11 +499,15 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 		member.DisabledReason = *input.DisabledReason
 	}
 	member.UpdatedAt = now
+	var tierIDParam interface{}
+	if member.TierID != "" {
+		tierIDParam = member.TierID
+	}
 	_, err = tx.Exec(
 		`UPDATE members
-		 SET name = $2, email = $3, note = $4, uuid = $5, status = $6, expires_at = $7, quota_bytes_limit = $8, disabled_reason = $9, updated_at = $10
+		 SET name = $2, email = $3, note = $4, uuid = $5, tier_id = $6, status = $7, expires_at = $8, quota_bytes_limit = $9, disabled_reason = $10, updated_at = $11
 		 WHERE id = $1`,
-		member.ID, member.Name, member.Email, member.Note, member.UUID,
+		member.ID, member.Name, member.Email, member.Note, member.UUID, tierIDParam,
 		member.Status, member.ExpiresAt, member.QuotaBytesLimit, member.DisabledReason, member.UpdatedAt,
 	)
 	if err != nil {
@@ -1000,7 +1009,7 @@ func (s *PostgresStore) ListNodes() []domain.Node {
 
 func (s *PostgresStore) ListMembers() []domain.Member {
 	rows, err := s.db.Query(
-		`SELECT id, uuid, name, email, note, status, expires_at, quota_bytes_limit, disabled_reason, created_at, updated_at
+		`SELECT id, uuid, name, email, note, status, expires_at, quota_bytes_limit, tier_id, subscription_token, disabled_reason, created_at, updated_at
 		 FROM members
 		 ORDER BY created_at ASC`,
 	)
@@ -1226,7 +1235,7 @@ func (s *PostgresStore) getNodeGroupTx(q queryRower, groupID string) (*domain.No
 
 func (s *PostgresStore) getMemberByIDTx(tx *sql.Tx, memberID string) (*domain.Member, error) {
 	row := tx.QueryRow(
-		`SELECT id, uuid, name, email, note, status, expires_at, quota_bytes_limit, disabled_reason, created_at, updated_at
+		`SELECT id, uuid, name, email, note, status, expires_at, quota_bytes_limit, tier_id, subscription_token, disabled_reason, created_at, updated_at
 		 FROM members
 		 WHERE id = $1`,
 		memberID,
@@ -1275,7 +1284,7 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 		seenMembers[cred.MemberID] = struct{}{}
 	}
 	groupRows, err := tx.Query(
-		`SELECT DISTINCT m.id, m.uuid, m.name, m.email, m.note, m.status, m.expires_at, m.quota_bytes_limit, m.disabled_reason, m.created_at, m.updated_at, ngm.group_id
+		`SELECT DISTINCT m.id, m.uuid, m.name, m.email, m.note, m.status, m.expires_at, m.quota_bytes_limit, m.tier_id, m.subscription_token, m.disabled_reason, m.created_at, m.updated_at, ngm.group_id
 		 FROM node_group_memberships ngm
 		 JOIN member_node_group_grants mg ON mg.group_id = ngm.group_id
 		 JOIN members m ON m.id = mg.member_id
@@ -1292,6 +1301,7 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 	for groupRows.Next() {
 		var member domain.Member
 		var expiresAt sql.NullTime
+		var tierID sql.NullString
 		var groupID string
 		if err := groupRows.Scan(
 			&member.ID,
@@ -1302,6 +1312,8 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 			&member.Status,
 			&expiresAt,
 			&member.QuotaBytesLimit,
+			&tierID,
+			&member.SubscriptionToken,
 			&member.DisabledReason,
 			&member.CreatedAt,
 			&member.UpdatedAt,
@@ -1311,6 +1323,9 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 		}
 		if expiresAt.Valid {
 			member.ExpiresAt = &expiresAt.Time
+		}
+		if tierID.Valid {
+			member.TierID = tierID.String
 		}
 		if _, ok := seenMembers[member.ID]; ok {
 			continue
@@ -1400,6 +1415,7 @@ func scanNode(row scanner) (*domain.Node, error) {
 func scanMember(row scanner) *domain.Member {
 	var member domain.Member
 	var expiresAt sql.NullTime
+	var tierID sql.NullString
 	if err := row.Scan(
 		&member.ID,
 		&member.UUID,
@@ -1409,6 +1425,8 @@ func scanMember(row scanner) *domain.Member {
 		&member.Status,
 		&expiresAt,
 		&member.QuotaBytesLimit,
+		&tierID,
+		&member.SubscriptionToken,
 		&member.DisabledReason,
 		&member.CreatedAt,
 		&member.UpdatedAt,
@@ -1417,6 +1435,9 @@ func scanMember(row scanner) *domain.Member {
 	}
 	if expiresAt.Valid {
 		member.ExpiresAt = &expiresAt.Time
+	}
+	if tierID.Valid {
+		member.TierID = tierID.String
 	}
 	return &member
 }
@@ -1435,4 +1456,103 @@ func mapPQError(err error) error {
 		}
 	}
 	return err
+}
+
+// ── Tier CRUD ──────────────────────────────────────────────────────────────────
+
+func (s *PostgresStore) CreateTier(input CreateTierInput) (*domain.Tier, error) {
+	now := time.Now().UTC()
+	tier := &domain.Tier{
+		ID:          newUUID(),
+		Name:        strings.TrimSpace(input.Name),
+		Description: strings.TrimSpace(input.Description),
+		QuotaBytes:  input.QuotaBytes,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO tiers (id, name, description, quota_bytes, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		tier.ID, tier.Name, tier.Description, tier.QuotaBytes, tier.CreatedAt, tier.UpdatedAt,
+	)
+	if err != nil {
+		return nil, mapPQError(err)
+	}
+	return tier, nil
+}
+
+func (s *PostgresStore) UpdateTier(tierID string, input UpdateTierInput) (*domain.Tier, error) {
+	now := time.Now().UTC()
+	row := s.db.QueryRow(
+		`SELECT id, name, description, quota_bytes, created_at, updated_at FROM tiers WHERE id = $1`,
+		tierID,
+	)
+	var tier domain.Tier
+	if err := row.Scan(&tier.ID, &tier.Name, &tier.Description, &tier.QuotaBytes, &tier.CreatedAt, &tier.UpdatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if input.Name != nil {
+		tier.Name = strings.TrimSpace(*input.Name)
+	}
+	if input.Description != nil {
+		tier.Description = strings.TrimSpace(*input.Description)
+	}
+	if input.QuotaBytes != nil {
+		tier.QuotaBytes = *input.QuotaBytes
+	}
+	tier.UpdatedAt = now
+	_, err := s.db.Exec(
+		`UPDATE tiers SET name = $2, description = $3, quota_bytes = $4, updated_at = $5 WHERE id = $1`,
+		tier.ID, tier.Name, tier.Description, tier.QuotaBytes, tier.UpdatedAt,
+	)
+	if err != nil {
+		return nil, mapPQError(err)
+	}
+	return &tier, nil
+}
+
+func (s *PostgresStore) DeleteTier(tierID string) error {
+	res, err := s.db.Exec(`DELETE FROM tiers WHERE id = $1`, tierID)
+	if err != nil {
+		return mapPQError(err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListTiers() []domain.Tier {
+	rows, err := s.db.Query(
+		`SELECT id, name, description, quota_bytes, created_at, updated_at FROM tiers ORDER BY created_at ASC`,
+	)
+	if err != nil {
+		return []domain.Tier{}
+	}
+	defer rows.Close()
+	out := make([]domain.Tier, 0)
+	for rows.Next() {
+		var t domain.Tier
+		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.QuotaBytes, &t.CreatedAt, &t.UpdatedAt); err == nil {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (s *PostgresStore) GetMemberBySubscriptionToken(token string) (*domain.Member, error) {
+	row := s.db.QueryRow(
+		`SELECT id, uuid, name, email, note, status, expires_at, quota_bytes_limit, tier_id, subscription_token, disabled_reason, created_at, updated_at
+		 FROM members WHERE subscription_token = $1`,
+		token,
+	)
+	member := scanMember(row)
+	if member == nil {
+		return nil, ErrNotFound
+	}
+	return member, nil
 }

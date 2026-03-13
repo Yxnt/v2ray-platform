@@ -274,6 +274,12 @@
       <label>UUID <span style="color:var(--text-muted);font-size:12px">(VMess client ID, shared across all nodes)</span></label>
       <input id="edit-member-uuid" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="font-family:monospace">
     </div>
+    <div class="field">
+      <label>Tier</label>
+      <select id="edit-member-tier" style="width:100%">
+        <option value="">— No tier —</option>
+      </select>
+    </div>
     <div class="edit-modal-actions">
       <button class="btn btn-secondary" id="edit-member-cancel">Cancel</button>
       <button class="btn btn-primary" id="edit-member-save">Save</button>
@@ -323,6 +329,7 @@
   <button class="tab-btn" data-tab="members">Members</button>
   <button class="tab-btn" data-tab="grants">Grants</button>
   <button class="tab-btn" data-tab="groups">Groups</button>
+  <button class="tab-btn" data-tab="tiers">Tiers</button>
   <button class="tab-btn" data-tab="usage">Usage</button>
   <button class="tab-btn" data-tab="tokens">Bootstrap Tokens</button>
   <button class="tab-btn" data-tab="logs">Logs & Alerts</button>
@@ -487,7 +494,7 @@
         <thead>
           <tr>
             <th class="checkbox-cell"><input type="checkbox" data-select-all="member"></th>
-            <th>Name</th><th>Email</th><th>Note</th><th>Status</th><th>Expires</th><th>Quota (GB)</th><th>Created</th><th></th>
+            <th>Name</th><th>Email</th><th>Note</th><th>Status</th><th>Tier</th><th>Expires</th><th>Quota (GB)</th><th>Created</th><th></th>
           </tr>
         </thead>
         <tbody id="members-body"></tbody>
@@ -595,6 +602,30 @@
           <tr><th>Group</th><th>Member</th><th>Created</th><th></th></tr>
         </thead>
         <tbody id="group-grants-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ════════════════ TIERS ════════════════ -->
+  <section class="tab-content" id="tab-tiers">
+    <div class="section-hd">
+      <div><h2>Tiers</h2><p>Service tiers with monthly traffic quotas. Assign tiers to members via Edit.</p></div>
+    </div>
+    <div class="create-panel">
+      <button class="cp-toggle" data-panel="tier">+ New tier</button>
+      <div class="cp-body" id="panel-tier" style="display:none">
+        <div class="field"><label>Name</label><input id="tier-name" placeholder="Standard"></div>
+        <div class="field"><label>Description</label><input id="tier-desc" placeholder="50 GB/month"></div>
+        <div class="field"><label>Monthly Quota (GB, 0 = unlimited)</label><input id="tier-quota-gb" type="number" min="0" placeholder="50"></div>
+        <button class="btn btn-primary" id="tier-create-btn">Create tier</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Description</th><th>Monthly Quota</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="tiers-body"></tbody>
       </table>
     </div>
   </section>
@@ -729,6 +760,7 @@
       auditLogsBody: document.querySelector('#audit-logs-body'),
       nodeUsageBody: document.querySelector('#node-usage-body'),
       memberUsageBody: document.querySelector('#member-usage-body'),
+      tiersBody: document.querySelector('#tiers-body'),
       grantNode: document.querySelector('#grant-node'),
       grantMember: document.querySelector('#grant-member'),
       groupGrantGroup: document.querySelector('#group-grant-group'),
@@ -868,6 +900,7 @@
         syncEvents,
         allNodes,
         allMembers,
+        tiers,
       ] = await Promise.all([
         apiOrEmpty('/api/admin/bootstrap-tokens'),
         apiOrEmpty(grantListURL),
@@ -883,6 +916,7 @@
         apiOrEmpty('/api/admin/sync-events'),
         apiOrEmpty('/api/admin/nodes'),
         apiOrEmpty('/api/admin/members'),
+        apiOrEmpty('/api/admin/tiers'),
       ]);
 
       els.bootstrapTokensBody.innerHTML = '';
@@ -905,16 +939,38 @@
         els.nodesBody.appendChild(row);
       }
 
+      // Populate tier select in edit modal and build tier lookup map.
+      const tierMap = {};
+      const tierSelect = document.querySelector('#edit-member-tier');
+      tierSelect.innerHTML = '<option value="">— No tier —</option>';
+      for (const t of (tiers.items || [])) {
+        tierMap[t.id] = t;
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = `${t.name}${t.quota_bytes > 0 ? ' (' + (t.quota_bytes / 1e9).toFixed(0) + ' GB/mo)' : ' (unlimited)'}`;
+        tierSelect.appendChild(opt);
+      }
+
+      els.tiersBody.innerHTML = '';
+      for (const tier of (tiers.items || [])) {
+        const quotaLabel = tier.quota_bytes > 0 ? (tier.quota_bytes / 1e9).toFixed(0) + ' GB/month' : 'Unlimited';
+        const row = document.createElement('tr');
+        row.innerHTML = `<td><strong>${tier.name}</strong></td><td style="color:var(--text-dim)">${tier.description || '—'}</td><td style="color:var(--text-dim)">${quotaLabel}</td><td><button class="btn btn-danger btn-xs" data-tier-delete="${tier.id}">✕</button></td>`;
+        els.tiersBody.appendChild(row);
+      }
+
       els.membersBody.innerHTML = '';
       for (const member of members.items) {
         const badge = `<span class="badge badge-${member.status || 'active'}">${member.status || 'active'}</span>`;
         const expires = member.expires_at ? new Date(member.expires_at).toLocaleDateString() : '—';
         const quotaGB = member.quota_bytes_limit > 0 ? (member.quota_bytes_limit / 1e9).toFixed(0) : '—';
+        const tierLabel = member.tier_id && tierMap[member.tier_id] ? tierMap[member.tier_id].name : '—';
         const isSuspended = member.status === 'suspended';
         const toggleLabel = isSuspended ? 'Activate' : 'Suspend';
         const toggleStatus = isSuspended ? 'active' : 'suspended';
+        const subToken = member.subscription_token || '';
         const row = document.createElement('tr');
-        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}">Edit</button><button class="btn btn-secondary btn-xs" data-member-clash="${member.id}" data-member-name="${encodeURIComponent(member.name)}">Clash</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${tierLabel}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}" data-member-tier="${member.tier_id||''}">Edit</button><button class="btn btn-secondary btn-xs" data-member-clash="${member.id}" data-member-name="${encodeURIComponent(member.name)}">Clash↓</button><button class="btn btn-secondary btn-xs" data-member-sub="${subToken}" title="Copy subscription URL">Sub🔗</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
         els.membersBody.appendChild(row);
       }
 
@@ -1310,8 +1366,23 @@
         document.querySelector('#edit-member-email').value = decodeURIComponent(btn.dataset.memberEmail || '');
         document.querySelector('#edit-member-note').value  = decodeURIComponent(btn.dataset.memberNote || '');
         document.querySelector('#edit-member-uuid').value  = btn.dataset.memberUuid || '';
+        document.querySelector('#edit-member-tier').value  = btn.dataset.memberTier || '';
         document.querySelector('#edit-member-modal').dataset.editingId = editMemberID;
         document.querySelector('#edit-member-modal').classList.remove('hidden');
+        return;
+      }
+
+      const subToken = event.target?.dataset?.memberSub;
+      if (subToken !== undefined) {
+        const url = `${location.origin}/sub/${subToken}/clash.yaml`;
+        navigator.clipboard.writeText(url).then(() => {
+          const btn = event.target;
+          const orig = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        }).catch(() => {
+          prompt('Subscription URL (copy manually):', url);
+        });
         return;
       }
 
@@ -1429,11 +1500,13 @@
       const modal = document.querySelector('#edit-member-modal');
       const memberID = modal.dataset.editingId;
       if (!memberID) return;
+      const tierVal = document.querySelector('#edit-member-tier').value;
       const patch = {
-        name:  document.querySelector('#edit-member-name').value.trim() || undefined,
-        email: document.querySelector('#edit-member-email').value.trim() || undefined,
-        note:  document.querySelector('#edit-member-note').value.trim(),
-        uuid:  document.querySelector('#edit-member-uuid').value.trim() || undefined,
+        name:    document.querySelector('#edit-member-name').value.trim() || undefined,
+        email:   document.querySelector('#edit-member-email').value.trim() || undefined,
+        note:    document.querySelector('#edit-member-note').value.trim(),
+        uuid:    document.querySelector('#edit-member-uuid').value.trim() || undefined,
+        tier_id: tierVal !== undefined ? tierVal : undefined,
       };
       // Remove undefined keys
       Object.keys(patch).forEach(k => patch[k] === undefined && delete patch[k]);
@@ -1442,6 +1515,39 @@
         modal.classList.add('hidden');
       } catch (error) {
         alert(error.message);
+      }
+    });
+
+    // ── Tier create ──
+    document.querySelector('#tier-create-btn').addEventListener('click', async () => {
+      const name = document.querySelector('#tier-name').value.trim();
+      const desc = document.querySelector('#tier-desc').value.trim();
+      const quotaGB = parseFloat(document.querySelector('#tier-quota-gb').value || '0');
+      if (!name) { alert('Name is required'); return; }
+      try {
+        await api('/api/admin/tiers', {
+          method: 'POST',
+          body: JSON.stringify({ name, description: desc, quota_bytes: Math.round(quotaGB * 1e9) }),
+        });
+        document.querySelector('#tier-name').value = '';
+        document.querySelector('#tier-desc').value = '';
+        document.querySelector('#tier-quota-gb').value = '';
+        await refreshDashboard();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.addEventListener('click', async (event2) => {
+      const tierDeleteID = event2.target?.dataset?.tierDelete;
+      if (tierDeleteID) {
+        if (!confirm('Delete this tier? Members assigned to it will have their tier cleared.')) return;
+        try {
+          await api(`/api/admin/tiers/${tierDeleteID}`, { method: 'DELETE' });
+          await refreshDashboard();
+        } catch (error) {
+          alert(error.message);
+        }
       }
     });
 

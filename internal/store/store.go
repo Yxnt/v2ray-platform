@@ -13,11 +13,24 @@ type UpdateMemberInput struct {
 	Email           *string
 	Note            *string
 	UUID            *string
+	TierID          *string // empty string = clear tier
 	Status          *domain.MemberStatus
 	ExpiresAt       *time.Time // set to non-nil to write; use ClearExpiry to remove
 	ClearExpiry     bool
 	QuotaBytesLimit *int64
 	DisabledReason  *string
+}
+
+type CreateTierInput struct {
+	Name        string
+	Description string
+	QuotaBytes  int64
+}
+
+type UpdateTierInput struct {
+	Name        *string
+	Description *string
+	QuotaBytes  *int64
 }
 
 type Store interface {
@@ -37,6 +50,11 @@ type Store interface {
 	GetNodeConfig(nodeToken string) (*domain.ConfigRevision, error)
 	CreateMember(input CreateMemberInput) (*domain.Member, error)
 	UpdateMember(memberID string, input UpdateMemberInput) (*domain.Member, error)
+	GetMemberBySubscriptionToken(token string) (*domain.Member, error)
+	CreateTier(input CreateTierInput) (*domain.Tier, error)
+	UpdateTier(tierID string, input UpdateTierInput) (*domain.Tier, error)
+	DeleteTier(tierID string) error
+	ListTiers() []domain.Tier
 	CreateNodeGroup(name, description string) (*domain.NodeGroup, error)
 	UpdateNodeGroup(groupID, name, description string) (*domain.NodeGroup, error)
 	DeleteNodeGroup(groupID string) error

@@ -74,6 +74,7 @@ type MemoryStore struct {
 	nodeGroupNodes  map[string]map[string]time.Time
 	groupGrants     map[string]map[string]time.Time
 	members         map[string]*domain.Member
+	tiers           map[string]*domain.Tier
 	bootstrapTokens map[string]*domain.BootstrapToken
 	grants          map[string]*domain.AccessGrant
 	credentials     map[string]*domain.NodeCredential
@@ -101,6 +102,7 @@ func NewMemoryStore() *MemoryStore {
 		nodeGroupNodes:  map[string]map[string]time.Time{},
 		groupGrants:     map[string]map[string]time.Time{},
 		members:         map[string]*domain.Member{},
+		tiers:           map[string]*domain.Tier{},
 		bootstrapTokens: map[string]*domain.BootstrapToken{},
 		grants:          map[string]*domain.AccessGrant{},
 		credentials:     map[string]*domain.NodeCredential{},
@@ -385,14 +387,15 @@ func (s *MemoryStore) CreateMember(input CreateMemberInput) (*domain.Member, err
 
 	now := time.Now().UTC()
 	member := &domain.Member{
-		ID:        newID("member"),
-		UUID:      newUUID(),
-		Name:      input.Name,
-		Email:     strings.ToLower(strings.TrimSpace(input.Email)),
-		Note:      input.Note,
-		Status:    domain.MemberStatusActive,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                newID("member"),
+		UUID:              newUUID(),
+		Name:              input.Name,
+		Email:             strings.ToLower(strings.TrimSpace(input.Email)),
+		Note:              input.Note,
+		Status:            domain.MemberStatusActive,
+		SubscriptionToken: newUUID(),
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	s.members[member.ID] = member
 	return cloneMember(member), nil
@@ -424,6 +427,9 @@ func (s *MemoryStore) UpdateMember(memberID string, input UpdateMemberInput) (*d
 				cred.UUID = member.UUID
 			}
 		}
+	}
+	if input.TierID != nil {
+		member.TierID = *input.TierID
 	}
 	if input.Status != nil {
 		member.Status = *input.Status
@@ -1037,4 +1043,74 @@ func (s *MemoryStore) findNodeByTokenLocked(plainToken string) (*domain.Node, er
 		}
 	}
 	return nil, ErrUnauthorized
+}
+
+// ── Tier CRUD ──────────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateTier(input CreateTierInput) (*domain.Tier, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	tier := &domain.Tier{
+		ID:          newUUID(),
+		Name:        strings.TrimSpace(input.Name),
+		Description: strings.TrimSpace(input.Description),
+		QuotaBytes:  input.QuotaBytes,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	s.tiers[tier.ID] = tier
+	return tier, nil
+}
+
+func (s *MemoryStore) UpdateTier(tierID string, input UpdateTierInput) (*domain.Tier, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tier, ok := s.tiers[tierID]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if input.Name != nil {
+		tier.Name = strings.TrimSpace(*input.Name)
+	}
+	if input.Description != nil {
+		tier.Description = strings.TrimSpace(*input.Description)
+	}
+	if input.QuotaBytes != nil {
+		tier.QuotaBytes = *input.QuotaBytes
+	}
+	tier.UpdatedAt = time.Now().UTC()
+	return tier, nil
+}
+
+func (s *MemoryStore) DeleteTier(tierID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tiers[tierID]; !ok {
+		return ErrNotFound
+	}
+	delete(s.tiers, tierID)
+	return nil
+}
+
+func (s *MemoryStore) ListTiers() []domain.Tier {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]domain.Tier, 0, len(s.tiers))
+	for _, t := range s.tiers {
+		out = append(out, *t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out
+}
+
+func (s *MemoryStore) GetMemberBySubscriptionToken(token string) (*domain.Member, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, m := range s.members {
+		if m.SubscriptionToken == token {
+			return cloneMember(m), nil
+		}
+	}
+	return nil, ErrNotFound
 }

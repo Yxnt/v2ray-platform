@@ -87,6 +87,12 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Han
 	mux.HandleFunc("GET /api/admin/export/{resource}", withAdmin(cfg, svc.sessions, svc.handleExportResource))
 	mux.HandleFunc("GET /api/admin/sync-events", withAdmin(cfg, svc.sessions, svc.handleListSyncEvents))
 	mux.HandleFunc("GET /api/admin/audit-logs", withAdmin(cfg, svc.sessions, svc.handleListAuditLogs))
+	mux.HandleFunc("POST /api/admin/tiers", withAdmin(cfg, svc.sessions, svc.handleCreateTier))
+	mux.HandleFunc("GET /api/admin/tiers", withAdmin(cfg, svc.sessions, svc.handleListTiers))
+	mux.HandleFunc("PATCH /api/admin/tiers/{tierID}", withAdmin(cfg, svc.sessions, svc.handleUpdateTier))
+	mux.HandleFunc("DELETE /api/admin/tiers/{tierID}", withAdmin(cfg, svc.sessions, svc.handleDeleteTier))
+	// Public Clash subscription endpoint — authenticated via member's subscription token only.
+	mux.HandleFunc("GET /sub/{token}/clash.yaml", svc.handlePublicClashSubscription)
 	mux.HandleFunc("POST /api/agent/register", svc.handleAgentRegister)
 	mux.HandleFunc("POST /api/agent/heartbeat", svc.handleAgentHeartbeat)
 	mux.HandleFunc("GET /api/agent/config", svc.handleAgentConfig)
@@ -161,10 +167,23 @@ type updateMemberRequest struct {
 	Email           *string `json:"email,omitempty"`
 	Note            *string `json:"note,omitempty"`
 	UUID            *string `json:"uuid,omitempty"`
+	TierID          *string `json:"tier_id,omitempty"`
 	Status          *string `json:"status,omitempty"`     // active | suspended | expired
 	ExpiresAt       *string `json:"expires_at,omitempty"` // RFC3339 timestamp or empty string to clear
 	QuotaBytesLimit *int64  `json:"quota_bytes_limit,omitempty"`
 	DisabledReason  *string `json:"disabled_reason,omitempty"`
+}
+
+type createTierRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	QuotaBytes  int64  `json:"quota_bytes"`
+}
+
+type updateTierRequest struct {
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	QuotaBytes  *int64  `json:"quota_bytes,omitempty"`
 }
 
 type batchDeleteMembersRequest struct {
@@ -390,6 +409,7 @@ func (svc *ControlPlaneService) handleUpdateMember(w http.ResponseWriter, r *htt
 		Email:           req.Email,
 		Note:            req.Note,
 		UUID:            req.UUID,
+		TierID:          req.TierID,
 		QuotaBytesLimit: req.QuotaBytesLimit,
 		DisabledReason:  req.DisabledReason,
 	}
@@ -429,37 +449,17 @@ func (svc *ControlPlaneService) handleListMembers(w http.ResponseWriter, r *http
 	})
 }
 
-func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r *http.Request) {
-	memberID := r.PathValue("memberID")
-	if memberID == "" {
-		writeError(w, http.StatusBadRequest, errors.New("missing member id"))
-		return
-	}
-
-	// Find the member.
-	var member *domain.Member
-	for _, m := range svc.store.ListMembers() {
-		if m.ID == memberID {
-			mc := m
-			member = &mc
-			break
-		}
-	}
-	if member == nil {
-		writeError(w, http.StatusNotFound, errors.New("member not found"))
-		return
-	}
-
+func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member) []byte {
 	// Collect all node IDs the member has access to.
 	nodeIDs := map[string]struct{}{}
 	for _, g := range svc.store.ListGrants() {
-		if g.MemberID == memberID {
+		if g.MemberID == member.ID {
 			nodeIDs[g.NodeID] = struct{}{}
 		}
 	}
 	groupIDs := map[string]struct{}{}
 	for _, gg := range svc.store.ListGroupGrantViews() {
-		if gg.MemberID == memberID {
+		if gg.MemberID == member.ID {
 			groupIDs[gg.GroupID] = struct{}{}
 		}
 	}
@@ -469,20 +469,15 @@ func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r
 		}
 	}
 
-	// Build proxy list from accessible nodes.
 	type wsOpts struct {
-		Path string `yaml:"path"`
+		Path string
 	}
 	type proxy struct {
-		Name    string `yaml:"name"`
-		Type    string `yaml:"type"`
-		Server  string `yaml:"server"`
-		Port    int    `yaml:"port"`
-		UUID    string `yaml:"uuid"`
-		AlterId int    `yaml:"alterId"`
-		Cipher  string `yaml:"cipher"`
-		Network string `yaml:"network"`
-		WsOpts  wsOpts `yaml:"ws-opts"`
+		Name    string
+		Server  string
+		Port    int
+		UUID    string
+		WsPath  string
 	}
 
 	var proxies []proxy
@@ -496,20 +491,15 @@ func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r
 			name = node.Region + " - " + node.Name
 		}
 		proxies = append(proxies, proxy{
-			Name:    name,
-			Type:    "vmess",
-			Server:  node.PublicHost,
-			Port:    80,
-			UUID:    member.UUID,
-			AlterId: 0,
-			Cipher:  "auto",
-			Network: "ws",
-			WsOpts:  wsOpts{Path: "/" + node.Name},
+			Name:   name,
+			Server: node.PublicHost,
+			Port:   80,
+			UUID:   member.UUID,
+			WsPath: "/" + node.Name,
 		})
 		proxyNames = append(proxyNames, name)
 	}
 
-	// Render YAML manually (avoid extra dependency).
 	var buf bytes.Buffer
 	buf.WriteString("mixed-port: 7890\n")
 	buf.WriteString("allow-lan: false\n")
@@ -531,15 +521,15 @@ func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r
 	buf.WriteString("proxies:\n")
 	for _, p := range proxies {
 		fmt.Fprintf(&buf, "  - name: %q\n", p.Name)
-		fmt.Fprintf(&buf, "    type: %s\n", p.Type)
+		buf.WriteString("    type: vmess\n")
 		fmt.Fprintf(&buf, "    server: %q\n", p.Server)
 		fmt.Fprintf(&buf, "    port: %d\n", p.Port)
 		fmt.Fprintf(&buf, "    uuid: %q\n", p.UUID)
-		fmt.Fprintf(&buf, "    alterId: %d\n", p.AlterId)
-		fmt.Fprintf(&buf, "    cipher: %s\n", p.Cipher)
-		fmt.Fprintf(&buf, "    network: %s\n", p.Network)
+		buf.WriteString("    alterId: 0\n")
+		buf.WriteString("    cipher: auto\n")
+		buf.WriteString("    network: ws\n")
 		buf.WriteString("    ws-opts:\n")
-		fmt.Fprintf(&buf, "      path: %q\n", p.WsOpts.Path)
+		fmt.Fprintf(&buf, "      path: %q\n", p.WsPath)
 		buf.WriteString("\n")
 	}
 
@@ -555,12 +545,59 @@ func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r
 	buf.WriteString("rules:\n")
 	buf.WriteString("  - GEOIP,CN,DIRECT\n")
 	buf.WriteString("  - MATCH,Proxy\n")
+	return buf.Bytes()
+}
 
+func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r *http.Request) {
+	memberID := r.PathValue("memberID")
+	if memberID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("missing member id"))
+		return
+	}
+	var member *domain.Member
+	for _, m := range svc.store.ListMembers() {
+		if m.ID == memberID {
+			mc := m
+			member = &mc
+			break
+		}
+	}
+	if member == nil {
+		writeError(w, http.StatusNotFound, errors.New("member not found"))
+		return
+	}
 	filename := fmt.Sprintf("clash-%s.yaml", strings.ReplaceAll(member.Name, " ", "-"))
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(buf.Bytes())
+	_, _ = w.Write(svc.buildMemberClashYAML(member))
+}
+
+// handlePublicClashSubscription serves a Clash subscription YAML for the member
+// identified by their subscription_token. This endpoint is intentionally public
+// (no admin auth) so users can paste the URL into their Clash client.
+func (svc *ControlPlaneService) handlePublicClashSubscription(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, errors.New("missing token"))
+		return
+	}
+	member, err := svc.store.GetMemberBySubscriptionToken(token)
+	if err != nil {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	if member.Status != domain.MemberStatusActive {
+		writeError(w, http.StatusForbidden, errors.New("account inactive"))
+		return
+	}
+	filename := fmt.Sprintf("clash-%s.yaml", strings.ReplaceAll(member.Name, " ", "-"))
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
+	// Clash clients poll this URL; tell them to re-fetch every hour.
+	w.Header().Set("Profile-Update-Interval", "1")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(svc.buildMemberClashYAML(member))
 }
 
 func (svc *ControlPlaneService) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
@@ -939,6 +976,74 @@ func (svc *ControlPlaneService) handleListSyncEvents(w http.ResponseWriter, r *h
 
 func (svc *ControlPlaneService) handleListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": svc.store.ListAuditLogs()})
+}
+
+// ── Tier handlers ─────────────────────────────────────────────────────────────
+
+func (svc *ControlPlaneService) handleCreateTier(w http.ResponseWriter, r *http.Request) {
+	var req createTierRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("name is required"))
+		return
+	}
+	tier, err := svc.store.CreateTier(store.CreateTierInput{
+		Name:        req.Name,
+		Description: req.Description,
+		QuotaBytes:  req.QuotaBytes,
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "tier.created", "tier", tier.ID, req)
+	writeJSON(w, http.StatusCreated, tier)
+}
+
+func (svc *ControlPlaneService) handleListTiers(w http.ResponseWriter, r *http.Request) {
+	items := svc.store.ListTiers()
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+func (svc *ControlPlaneService) handleUpdateTier(w http.ResponseWriter, r *http.Request) {
+	tierID := r.PathValue("tierID")
+	if tierID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("missing tier id"))
+		return
+	}
+	var req updateTierRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	tier, err := svc.store.UpdateTier(tierID, store.UpdateTierInput{
+		Name:        req.Name,
+		Description: req.Description,
+		QuotaBytes:  req.QuotaBytes,
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "tier.updated", "tier", tierID, req)
+	writeJSON(w, http.StatusOK, tier)
+}
+
+func (svc *ControlPlaneService) handleDeleteTier(w http.ResponseWriter, r *http.Request) {
+	tierID := r.PathValue("tierID")
+	if tierID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("missing tier id"))
+		return
+	}
+	if err := svc.store.DeleteTier(tierID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "tier.deleted", "tier", tierID, nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (svc *ControlPlaneService) handleAgentRegister(w http.ResponseWriter, r *http.Request) {
