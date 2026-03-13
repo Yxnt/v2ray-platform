@@ -236,6 +236,22 @@
       .app-header-center { display: none; }
     }
 
+    /* ── Toast notifications ── */
+    #toast-container {
+      position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+      display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+    }
+    .toast {
+      padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 500;
+      color: #fff; opacity: 0; transform: translateY(8px);
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none; max-width: 320px;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.success { background: #22863a; }
+    .toast.error   { background: #cb2431; }
+    .toast.info    { background: #0969da; }
+
     /* ── Edit member modal ── */
     .edit-modal-overlay {
       position: fixed; inset: 0; z-index: 300;
@@ -253,6 +269,8 @@
   </style>
 </head>
 <body>
+
+<div id="toast-container"></div>
 
 <!-- ── Edit Member Modal ── -->
 <div class="edit-modal-overlay hidden" id="edit-member-modal">
@@ -777,6 +795,18 @@
       return localStorage.getItem('sessionToken') || '';
     }
 
+    function toast(msg, type = 'success', durationMs = 3000) {
+      const el = document.createElement('div');
+      el.className = `toast ${type}`;
+      el.textContent = msg;
+      document.getElementById('toast-container').appendChild(el);
+      requestAnimationFrame(() => { requestAnimationFrame(() => { el.classList.add('show'); }); });
+      setTimeout(() => {
+        el.classList.remove('show');
+        setTimeout(() => el.remove(), 250);
+      }, durationMs);
+    }
+
     function buildURL(path, params) {
       const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params || {})) {
@@ -1254,17 +1284,18 @@
     document.querySelector('#batch-rebuild-nodes-btn').addEventListener('click', async () => {
       const nodeIDs = selectedValues('data-node-select');
       if (nodeIDs.length === 0) {
-        alert('Select at least one node.');
+        toast('Select at least one node.', 'info');
         return;
       }
       try {
-        await api('/api/admin/nodes/batch-rebuild', {
+        const result = await api('/api/admin/nodes/batch-rebuild', {
           method: 'POST',
           body: JSON.stringify({ node_ids: nodeIDs }),
         });
         await refreshDashboard();
+        toast(`✓ Rebuilt ${result.count} node(s)`, 'success');
       } catch (error) {
-        alert(error.message);
+        toast(error.message, 'error');
       }
     });
 
@@ -1440,11 +1471,18 @@
 
       const nodeID = event.target?.dataset?.nodeRebuild;
       if (nodeID) {
+        const btn = event.target;
+        btn.disabled = true;
+        btn.textContent = '…';
         try {
-          await api(`/api/admin/nodes/${nodeID}/rebuild-config`, { method: 'POST' });
+          const rev = await api(`/api/admin/nodes/${nodeID}/rebuild-config`, { method: 'POST' });
           await refreshDashboard();
+          toast(`✓ Rebuilt — config version ${rev.config_version}`, 'success');
         } catch (error) {
-          alert(error.message);
+          toast(error.message, 'error');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = '↺ Rebuild';
         }
       }
     });
