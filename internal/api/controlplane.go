@@ -516,6 +516,17 @@ func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r
 	buf.WriteString("mode: rule\n")
 	buf.WriteString("log-level: info\n")
 	buf.WriteString("external-controller: 127.0.0.1:9090\n\n")
+	buf.WriteString("dns:\n")
+	buf.WriteString("  enable: true\n")
+	buf.WriteString("  ipv6: false\n")
+	buf.WriteString("  nameserver:\n")
+	buf.WriteString("    - 223.5.5.5\n")
+	buf.WriteString("    - 119.29.29.29\n")
+	buf.WriteString("  fallback:\n")
+	buf.WriteString("    - 8.8.8.8\n")
+	buf.WriteString("    - 1.1.1.1\n")
+	buf.WriteString("  fallback-filter:\n")
+	buf.WriteString("    geoip: true\n\n")
 
 	buf.WriteString("proxies:\n")
 	for _, p := range proxies {
