@@ -25,12 +25,14 @@ type CreateTierInput struct {
 	Name        string
 	Description string
 	QuotaBytes  int64
+	QuotaType   string // "monthly" or "fixed"; defaults to "monthly"
 }
 
 type UpdateTierInput struct {
 	Name        *string
 	Description *string
 	QuotaBytes  *int64
+	QuotaType   *string
 }
 
 type Store interface {
@@ -75,6 +77,7 @@ type Store interface {
 	ListNodeSyncEvents(nodeID string) []domain.NodeSyncEvent
 	ListNodeUsageSummaries() []domain.NodeUsageSummary
 	ListMemberUsageSummaries() []domain.MemberUsageSummary
+	GetMemberUsageSince(memberID string, since time.Time) int64
 	RebuildNodeConfig(nodeID string) (*domain.ConfigRevision, error)
 	RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error
 	ListAuditLogs() []domain.AuditLog

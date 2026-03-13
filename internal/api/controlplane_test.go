@@ -59,7 +59,7 @@ func TestNormalizeIDsDeduplicates(t *testing.T) {
 
 func TestRouterHandlesAPIPreflight(t *testing.T) {
 	st := store.NewMemoryStore()
-	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "")
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
 	router := NewRouter(config.ControlPlaneConfig{}, svc)
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/admin/session", nil)
@@ -92,7 +92,7 @@ func TestStatelessMemoryModeLogoutAllReturnsSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewControlPlaneService(st, manager, nil, "memory", "svc", "rev", "")
+	svc := NewControlPlaneService(st, manager, nil, "memory", "svc", "rev", "", 0)
 	router := NewRouter(config.ControlPlaneConfig{}, svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/logout-all", nil)

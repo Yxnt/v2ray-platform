@@ -81,10 +81,19 @@ func (m *Monitor) Stop() {
 }
 
 func (m *Monitor) SweepMemberPolicies(now time.Time) error {
-	usageByMember := map[string]int64{}
+	// Build a map of all-time usage and tier definitions.
+	usageAllTime := map[string]int64{}
 	for _, usage := range m.store.ListMemberUsageSummaries() {
-		usageByMember[usage.MemberID] = usage.TotalBytes
+		usageAllTime[usage.MemberID] = usage.TotalBytes
 	}
+	tiers := map[string]domain.Tier{}
+	for _, t := range m.store.ListTiers() {
+		tiers[t.ID] = t
+	}
+
+	// Start of the current calendar month (UTC) for monthly-reset tiers.
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+
 	for _, member := range m.store.ListMembers() {
 		if member.Status != domain.MemberStatusArchived && member.ExpiresAt != nil && !member.ExpiresAt.After(now) && member.Status != domain.MemberStatusExpired {
 			status := domain.MemberStatusExpired
@@ -100,7 +109,33 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 			})
 			continue
 		}
-		if member.Status == domain.MemberStatusActive && member.QuotaBytesLimit > 0 && usageByMember[member.ID] >= member.QuotaBytesLimit {
+
+		// Determine effective quota and type.
+		// Tier quota takes precedence over the per-member quota_bytes_limit.
+		var effectiveQuota int64
+		quotaType := "fixed" // per-member limit is treated as fixed (all-time)
+		if member.TierID != "" {
+			if tier, ok := tiers[member.TierID]; ok && tier.QuotaBytes > 0 {
+				effectiveQuota = tier.QuotaBytes
+				quotaType = tier.QuotaType
+			}
+		}
+		if effectiveQuota == 0 && member.QuotaBytesLimit > 0 {
+			effectiveQuota = member.QuotaBytesLimit
+		}
+		if effectiveQuota == 0 || member.Status != domain.MemberStatusActive {
+			continue
+		}
+
+		// Calculate usage according to quota type.
+		var usedBytes int64
+		if quotaType == "monthly" {
+			usedBytes = m.store.GetMemberUsageSince(member.ID, monthStart)
+		} else {
+			usedBytes = usageAllTime[member.ID]
+		}
+
+		if usedBytes >= effectiveQuota {
 			status := domain.MemberStatusSuspended
 			reason := "quota exceeded automatically by control-plane policy"
 			if _, err := m.store.UpdateMember(member.ID, store.UpdateMemberInput{
@@ -110,8 +145,9 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 				return err
 			}
 			_ = m.store.RecordAuditLog("", "member.auto_suspended_quota", "member", member.ID, map[string]any{
-				"quota_bytes_limit": member.QuotaBytesLimit,
-				"observed_total":    usageByMember[member.ID],
+				"quota_bytes_limit": effectiveQuota,
+				"quota_type":        quotaType,
+				"observed_total":    usedBytes,
 			})
 		}
 	}
@@ -219,31 +255,57 @@ func (m *Monitor) buildAlerts(now time.Time) []domain.Alert {
 	for _, member := range m.store.ListMembers() {
 		members[member.ID] = member
 	}
+	tiers := map[string]domain.Tier{}
+	for _, t := range m.store.ListTiers() {
+		tiers[t.ID] = t
+	}
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	for _, usage := range m.store.ListMemberUsageSummaries() {
 		member, ok := members[usage.MemberID]
-		if !ok || member.QuotaBytesLimit <= 0 {
+		if !ok {
 			continue
 		}
-		ratio := float64(usage.TotalBytes) / float64(member.QuotaBytesLimit)
+		// Determine effective quota and type (same logic as SweepMemberPolicies).
+		var effectiveQuota int64
+		quotaType := "fixed"
+		if member.TierID != "" {
+			if tier, ok2 := tiers[member.TierID]; ok2 && tier.QuotaBytes > 0 {
+				effectiveQuota = tier.QuotaBytes
+				quotaType = tier.QuotaType
+			}
+		}
+		if effectiveQuota == 0 && member.QuotaBytesLimit > 0 {
+			effectiveQuota = member.QuotaBytesLimit
+		}
+		if effectiveQuota <= 0 {
+			continue
+		}
+		var usedBytes int64
+		if quotaType == "monthly" {
+			usedBytes = m.store.GetMemberUsageSince(member.ID, monthStart)
+		} else {
+			usedBytes = usage.TotalBytes
+		}
+		ratio := float64(usedBytes) / float64(effectiveQuota)
 		switch {
 		case ratio >= 1:
-			alerts = append(alerts, quotaAlert(member, usage.TotalBytes, "quota-exceeded", domain.AlertSeverityCritical, "Member quota exceeded"))
+			alerts = append(alerts, quotaAlert(member, usedBytes, effectiveQuota, "quota-exceeded", domain.AlertSeverityCritical, "Member quota exceeded"))
 		case ratio >= 0.95:
-			alerts = append(alerts, quotaAlert(member, usage.TotalBytes, "quota-95", domain.AlertSeverityWarning, "Member quota above 95%"))
+			alerts = append(alerts, quotaAlert(member, usedBytes, effectiveQuota, "quota-95", domain.AlertSeverityWarning, "Member quota above 95%"))
 		case ratio >= 0.80:
-			alerts = append(alerts, quotaAlert(member, usage.TotalBytes, "quota-80", domain.AlertSeverityInfo, "Member quota above 80%"))
+			alerts = append(alerts, quotaAlert(member, usedBytes, effectiveQuota, "quota-80", domain.AlertSeverityInfo, "Member quota above 80%"))
 		}
 	}
 	return alerts
 }
 
-func quotaAlert(member domain.Member, total int64, suffix string, severity domain.AlertSeverity, title string) domain.Alert {
+func quotaAlert(member domain.Member, used, limit int64, suffix string, severity domain.AlertSeverity, title string) domain.Alert {
 	return domain.Alert{
 		Fingerprint: "member-" + suffix + ":" + member.ID,
 		Type:        suffix,
 		Severity:    severity,
 		Title:       title,
-		Message:     "Member " + member.Email + " has used " + strconv.FormatInt(total, 10) + " bytes out of " + strconv.FormatInt(member.QuotaBytesLimit, 10) + ".",
+		Message:     "Member " + member.Email + " has used " + strconv.FormatInt(used, 10) + " bytes out of " + strconv.FormatInt(limit, 10) + ".",
 		TargetType:  "member",
 		TargetID:    member.ID,
 	}

@@ -47,7 +47,8 @@ type Tier struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
-	QuotaBytes  int64     `json:"quota_bytes"` // monthly quota in bytes; 0 = unlimited
+	QuotaBytes  int64     `json:"quota_bytes"`  // quota in bytes; 0 = unlimited
+	QuotaType   string    `json:"quota_type"`   // "monthly" = resets each calendar month; "fixed" = all-time
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }

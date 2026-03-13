@@ -923,6 +923,18 @@ func (s *MemoryStore) ListMemberUsageSummaries() []domain.MemberUsageSummary {
 	return out
 }
 
+func (s *MemoryStore) GetMemberUsageSince(memberID string, since time.Time) int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var total int64
+	for _, snap := range s.usageSnapshots {
+		if snap.MemberID == memberID && !snap.CollectedAt.Before(since) {
+			total += snap.UplinkBytes + snap.DownlinkBytes
+		}
+	}
+	return total
+}
+
 func (s *MemoryStore) RebuildNodeConfig(nodeID string) (*domain.ConfigRevision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1061,11 +1073,16 @@ func (s *MemoryStore) CreateTier(input CreateTierInput) (*domain.Tier, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
+	quotaType := strings.TrimSpace(input.QuotaType)
+	if quotaType != "monthly" && quotaType != "fixed" {
+		quotaType = "monthly"
+	}
 	tier := &domain.Tier{
 		ID:          newUUID(),
 		Name:        strings.TrimSpace(input.Name),
 		Description: strings.TrimSpace(input.Description),
 		QuotaBytes:  input.QuotaBytes,
+		QuotaType:   quotaType,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -1088,6 +1105,12 @@ func (s *MemoryStore) UpdateTier(tierID string, input UpdateTierInput) (*domain.
 	}
 	if input.QuotaBytes != nil {
 		tier.QuotaBytes = *input.QuotaBytes
+	}
+	if input.QuotaType != nil {
+		qt := strings.TrimSpace(*input.QuotaType)
+		if qt == "monthly" || qt == "fixed" {
+			tier.QuotaType = qt
+		}
 	}
 	tier.UpdatedAt = time.Now().UTC()
 	return tier, nil

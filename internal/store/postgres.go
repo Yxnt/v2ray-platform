@@ -1477,18 +1477,23 @@ func mapPQError(err error) error {
 
 func (s *PostgresStore) CreateTier(input CreateTierInput) (*domain.Tier, error) {
 	now := time.Now().UTC()
+	quotaType := strings.TrimSpace(input.QuotaType)
+	if quotaType != "monthly" && quotaType != "fixed" {
+		quotaType = "monthly"
+	}
 	tier := &domain.Tier{
 		ID:          newUUID(),
 		Name:        strings.TrimSpace(input.Name),
 		Description: strings.TrimSpace(input.Description),
 		QuotaBytes:  input.QuotaBytes,
+		QuotaType:   quotaType,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO tiers (id, name, description, quota_bytes, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		tier.ID, tier.Name, tier.Description, tier.QuotaBytes, tier.CreatedAt, tier.UpdatedAt,
+		`INSERT INTO tiers (id, name, description, quota_bytes, quota_type, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		tier.ID, tier.Name, tier.Description, tier.QuotaBytes, tier.QuotaType, tier.CreatedAt, tier.UpdatedAt,
 	)
 	if err != nil {
 		return nil, mapPQError(err)
@@ -1499,11 +1504,11 @@ func (s *PostgresStore) CreateTier(input CreateTierInput) (*domain.Tier, error) 
 func (s *PostgresStore) UpdateTier(tierID string, input UpdateTierInput) (*domain.Tier, error) {
 	now := time.Now().UTC()
 	row := s.db.QueryRow(
-		`SELECT id, name, description, quota_bytes, created_at, updated_at FROM tiers WHERE id = $1`,
+		`SELECT id, name, description, quota_bytes, quota_type, created_at, updated_at FROM tiers WHERE id = $1`,
 		tierID,
 	)
 	var tier domain.Tier
-	if err := row.Scan(&tier.ID, &tier.Name, &tier.Description, &tier.QuotaBytes, &tier.CreatedAt, &tier.UpdatedAt); err != nil {
+	if err := row.Scan(&tier.ID, &tier.Name, &tier.Description, &tier.QuotaBytes, &tier.QuotaType, &tier.CreatedAt, &tier.UpdatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -1518,10 +1523,16 @@ func (s *PostgresStore) UpdateTier(tierID string, input UpdateTierInput) (*domai
 	if input.QuotaBytes != nil {
 		tier.QuotaBytes = *input.QuotaBytes
 	}
+	if input.QuotaType != nil {
+		qt := strings.TrimSpace(*input.QuotaType)
+		if qt == "monthly" || qt == "fixed" {
+			tier.QuotaType = qt
+		}
+	}
 	tier.UpdatedAt = now
 	_, err := s.db.Exec(
-		`UPDATE tiers SET name = $2, description = $3, quota_bytes = $4, updated_at = $5 WHERE id = $1`,
-		tier.ID, tier.Name, tier.Description, tier.QuotaBytes, tier.UpdatedAt,
+		`UPDATE tiers SET name = $2, description = $3, quota_bytes = $4, quota_type = $5, updated_at = $6 WHERE id = $1`,
+		tier.ID, tier.Name, tier.Description, tier.QuotaBytes, tier.QuotaType, tier.UpdatedAt,
 	)
 	if err != nil {
 		return nil, mapPQError(err)
@@ -1543,7 +1554,7 @@ func (s *PostgresStore) DeleteTier(tierID string) error {
 
 func (s *PostgresStore) ListTiers() []domain.Tier {
 	rows, err := s.db.Query(
-		`SELECT id, name, description, quota_bytes, created_at, updated_at FROM tiers ORDER BY created_at ASC`,
+		`SELECT id, name, description, quota_bytes, quota_type, created_at, updated_at FROM tiers ORDER BY created_at ASC`,
 	)
 	if err != nil {
 		return []domain.Tier{}
@@ -1552,11 +1563,22 @@ func (s *PostgresStore) ListTiers() []domain.Tier {
 	out := make([]domain.Tier, 0)
 	for rows.Next() {
 		var t domain.Tier
-		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.QuotaBytes, &t.CreatedAt, &t.UpdatedAt); err == nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Description, &t.QuotaBytes, &t.QuotaType, &t.CreatedAt, &t.UpdatedAt); err == nil {
 			out = append(out, t)
 		}
 	}
 	return out
+}
+
+func (s *PostgresStore) GetMemberUsageSince(memberID string, since time.Time) int64 {
+	var total int64
+	_ = s.db.QueryRow(
+		`SELECT COALESCE(SUM(uplink_bytes + downlink_bytes), 0)
+		 FROM usage_snapshots
+		 WHERE member_id = $1 AND collected_at >= $2`,
+		memberID, since,
+	).Scan(&total)
+	return total
 }
 
 func (s *PostgresStore) GetMemberBySubscriptionToken(token string) (*domain.Member, error) {

@@ -225,12 +225,14 @@ type createTierRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	QuotaBytes  int64  `json:"quota_bytes"`
+	QuotaType   string `json:"quota_type"` // "monthly" or "fixed"
 }
 
 type updateTierRequest struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	QuotaBytes  *int64  `json:"quota_bytes,omitempty"`
+	QuotaType   *string `json:"quota_type,omitempty"`
 }
 
 type batchDeleteMembersRequest struct {
@@ -620,7 +622,7 @@ func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r
 		writeError(w, http.StatusNotFound, errors.New("member not found"))
 		return
 	}
-	filename := fmt.Sprintf("clash-%s.yaml", strings.ReplaceAll(member.Name, " ", "-"))
+	filename := "v2-subscription.yaml"
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
 	w.WriteHeader(http.StatusOK)
@@ -645,7 +647,7 @@ func (svc *ControlPlaneService) handlePublicClashSubscription(w http.ResponseWri
 		writeError(w, http.StatusForbidden, errors.New("account inactive"))
 		return
 	}
-	filename := fmt.Sprintf("clash-%s.yaml", strings.ReplaceAll(member.Name, " ", "-"))
+	filename := "v2-subscription.yaml"
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
 	// Clash clients poll this URL; tell them to re-fetch every hour.
@@ -1072,6 +1074,7 @@ func (svc *ControlPlaneService) handleCreateTier(w http.ResponseWriter, r *http.
 		Name:        req.Name,
 		Description: req.Description,
 		QuotaBytes:  req.QuotaBytes,
+		QuotaType:   req.QuotaType,
 	})
 	if err != nil {
 		writeStoreError(w, err)
@@ -1101,6 +1104,7 @@ func (svc *ControlPlaneService) handleUpdateTier(w http.ResponseWriter, r *http.
 		Name:        req.Name,
 		Description: req.Description,
 		QuotaBytes:  req.QuotaBytes,
+		QuotaType:   req.QuotaType,
 	})
 	if err != nil {
 		writeStoreError(w, err)
