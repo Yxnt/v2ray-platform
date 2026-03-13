@@ -75,7 +75,7 @@ func LoadControlPlane() ControlPlaneConfig {
 		DBConnMaxLifetime:       time.Duration(mustAtoi(envOr("CONTROL_PLANE_DB_CONN_MAX_LIFETIME_SECONDS", "300"))) * time.Second,
 		ServiceName:             os.Getenv("K_SERVICE"),
 		RevisionName:            os.Getenv("K_REVISION"),
-		AgentDownloadURL:        envOr("AGENT_DOWNLOAD_URL", "https://github.com/Yxnt/v2ray-platform/releases/latest/download/node-agent-linux-amd64"),
+		AgentDownloadURL:        envOr("AGENT_DOWNLOAD_URL", "https://github.com/Yxnt/v2ray-platform/releases/download/latest/node-agent-linux-amd64"),
 	}
 }
 

@@ -147,7 +147,7 @@ case "${ARCH}" in
   aarch64) AGENT_ARCH="arm64" ;;
   *)       echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;;
 esac
-AGENT_URL="https://github.com/Yxnt/v2ray-platform/releases/latest/download/node-agent-linux-${AGENT_ARCH}"
+AGENT_URL="https://github.com/Yxnt/v2ray-platform/releases/download/latest/node-agent-linux-${AGENT_ARCH}"
 curl -fsSL "${AGENT_URL}" -o "${BIN_DIR}/v2ray-platform-node-agent"
 chmod 0755 "${BIN_DIR}/v2ray-platform-node-agent"
 
