@@ -1,0 +1,14 @@
+[Unit]
+Description=V2Ray Platform Node Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/default/v2ray-platform-node-agent
+ExecStart=/usr/local/bin/v2ray-platform-node-agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

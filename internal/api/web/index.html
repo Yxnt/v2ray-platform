@@ -1,0 +1,1270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V2Ray Platform Console</title>
+  <style>
+    :root {
+      --bg:          #080d1a;
+      --surface:     #0f1623;
+      --surface-2:   #161f2e;
+      --surface-3:   #1e2a3d;
+      --border:      #1e2a3d;
+      --border-2:    #273348;
+      --text:        #dde3ee;
+      --text-dim:    #8fa3bf;
+      --text-muted:  #526070;
+      --accent:      #3b82f6;
+      --accent-h:    #2563eb;
+      --accent-glow: rgba(59,130,246,0.18);
+      --green:       #22c55e;
+      --yellow:      #f59e0b;
+      --red:         #ef4444;
+      --red-h:       #dc2626;
+      --radius:      10px;
+      --radius-sm:   6px;
+      font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+      color-scheme: dark;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100vh; background: var(--bg); color: var(--text); }
+
+    /* ── Login overlay ── */
+    .login-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .login-overlay.hidden { display: none; }
+    .login-card {
+      width: 100%; max-width: 400px; padding: 40px 36px;
+      background: var(--surface); border: 1px solid var(--border-2);
+      border-radius: 16px; box-shadow: 0 32px 80px rgba(0,0,0,0.6);
+    }
+    .login-logo { font-size: 32px; color: var(--accent); margin-bottom: 16px; }
+    .login-card h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.02em; }
+    .login-card p { font-size: 13px; color: var(--text-muted); margin: 0 0 28px; }
+    .login-card .btn { width: 100%; justify-content: center; padding: 10px 14px; margin-top: 20px; font-size: 14px; }
+    .login-error { color: #f87171; font-size: 13px; margin-top: 12px; text-align: center; min-height: 20px; }
+    .login-divider { text-align: center; font-size: 12px; color: var(--text-muted); margin: 18px 0 10px;
+      display: flex; align-items: center; gap: 10px; }
+    .login-divider::before, .login-divider::after {
+      content: ''; flex: 1; height: 1px; background: var(--border-2); }
+
+    /* ── App Header ── */
+    .app-header {
+      position: sticky; top: 0; z-index: 100;
+      height: 52px; padding: 0 20px;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: rgba(8,13,26,0.92); backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+    .app-brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .app-brand-icon { color: var(--accent); font-size: 20px; line-height: 1; }
+    .app-brand-name { font-size: 15px; font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; }
+    .app-brand-name em { color: var(--accent); font-style: normal; }
+    .app-header-center {
+      flex: 1; min-width: 0;
+      font-size: 12px; color: var(--text-dim);
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 5px 14px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 560px;
+    }
+    .app-header-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+    /* ── Tab nav ── */
+    .tab-nav {
+      display: flex; gap: 0; padding: 0 20px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      overflow-x: auto; scrollbar-width: none;
+    }
+    .tab-nav::-webkit-scrollbar { display: none; }
+    .tab-btn {
+      padding: 0 16px; height: 42px; line-height: 42px;
+      font: inherit; font-size: 13px; font-weight: 500;
+      background: transparent; border: none; border-bottom: 2px solid transparent;
+      color: var(--text-muted); cursor: pointer; white-space: nowrap;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Main layout ── */
+    .app-main { padding: 24px 20px; max-width: 1600px; margin: 0 auto; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 14px; border-radius: var(--radius-sm); border: none;
+      font: inherit; font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: background 0.15s, opacity 0.15s;
+      white-space: nowrap; text-decoration: none;
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary   { background: var(--accent); color: #fff; }
+    .btn-primary:hover { background: var(--accent-h); }
+    .btn-secondary { background: var(--surface-3); color: var(--text); border: 1px solid var(--border-2); }
+    .btn-secondary:hover { background: var(--border-2); }
+    .btn-danger    { background: var(--red); color: #fff; }
+    .btn-danger:hover { background: var(--red-h); }
+    .btn-ghost     { background: transparent; color: var(--text-dim); padding: 6px 10px; }
+    .btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+    .btn-sm  { padding: 5px 10px; font-size: 12px; }
+    .btn-xs  { padding: 3px 8px;  font-size: 11px; }
+
+    /* ── Section header ── */
+    .section-hd { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+    .section-hd h2 { font-size: 18px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.02em; }
+    .section-hd p  { font-size: 13px; color: var(--text-muted); margin: 0; }
+
+    /* ── Cards ── */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--text-dim); text-transform: uppercase;
+      letter-spacing: 0.06em; margin: 0 0 16px; }
+
+    /* ── Forms ── */
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field + .field { margin-top: 12px; }
+    .field.grow { flex: 1; min-width: 120px; }
+    label { font-size: 11px; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.06em; }
+    input, textarea, select {
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+      padding: 8px 10px; font: inherit; font-size: 13px; width: 100%;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    textarea { resize: vertical; min-height: 72px; }
+    select option { background: var(--surface-2); }
+
+    /* ── Collapsible create panel ── */
+    .create-panel { margin-bottom: 16px; }
+    .cp-toggle {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      padding: 9px 14px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); font: inherit; font-size: 13px; font-weight: 500;
+      color: var(--text-dim); cursor: pointer; text-align: left;
+      transition: background 0.15s, color 0.15s;
+    }
+    .cp-toggle:hover { background: var(--surface-2); color: var(--text); }
+    .cp-arrow { margin-left: auto; font-size: 18px; line-height: 1;
+      transition: transform 0.2s; display: inline-block; color: var(--text-muted); }
+    .cp-toggle.open .cp-arrow { transform: rotate(45deg); }
+    .cp-body {
+      display: none; padding: 16px 18px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-top: none; border-radius: 0 0 var(--radius) var(--radius); margin-top: -1px;
+    }
+    .cp-body.open { display: block; }
+    .form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+
+    /* ── Toolbar ── */
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .toolbar input, .toolbar select { flex: 1; min-width: 130px; max-width: 220px; }
+    .toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    .toolbar-actions select { width: auto; min-width: 150px; padding: 5px 8px; font-size: 12px; }
+
+    /* ── Tables ── */
+    .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead { background: var(--surface-2); }
+    th {
+      text-align: left; padding: 10px 12px;
+      font-size: 11px; font-weight: 600; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: rgba(255,255,255,0.025); }
+    .checkbox-cell { width: 38px; }
+    .checkbox-cell input { width: auto; }
+    td code { font-size: 11px; white-space: pre-wrap; word-break: break-word;
+      color: var(--text-dim); font-family: ui-monospace, monospace; }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-flex; align-items: center;
+      border-radius: 20px; padding: 2px 8px;
+      font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .badge-active       { background: rgba(34,197,94,.12);  color: #4ade80; border: 1px solid rgba(34,197,94,.25); }
+    .badge-online       { background: rgba(34,197,94,.12);  color: #4ade80; border: 1px solid rgba(34,197,94,.25); }
+    .badge-ok           { background: rgba(34,197,94,.12);  color: #4ade80; border: 1px solid rgba(34,197,94,.25); }
+    .badge-suspended    { background: rgba(239,68,68,.12);  color: #f87171; border: 1px solid rgba(239,68,68,.25); }
+    .badge-degraded     { background: rgba(239,68,68,.12);  color: #f87171; border: 1px solid rgba(239,68,68,.25); }
+    .badge-firing       { background: rgba(239,68,68,.12);  color: #f87171; border: 1px solid rgba(239,68,68,.25); }
+    .badge-expired      { background: rgba(100,116,139,.12); color: #94a3b8; border: 1px solid rgba(100,116,139,.25); }
+    .badge-offline      { background: rgba(100,116,139,.12); color: #94a3b8; border: 1px solid rgba(100,116,139,.25); }
+    .badge-provisioning { background: rgba(245,158,11,.12); color: #fbbf24; border: 1px solid rgba(245,158,11,.25); }
+    .badge-yes   { background: rgba(34,197,94,.12);  color: #4ade80; border: 1px solid rgba(34,197,94,.25); font-size:11px; padding:2px 8px; border-radius:20px; }
+    .badge-no    { background: rgba(239,68,68,.12);  color: #f87171; border: 1px solid rgba(239,68,68,.25); font-size:11px; padding:2px 8px; border-radius:20px; }
+
+    /* ── Output pre ── */
+    .output-pre {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 12px; margin-top: 12px;
+      font-size: 12px; font-family: ui-monospace, monospace;
+      white-space: pre-wrap; word-break: break-all;
+      min-height: 48px; max-height: 200px; overflow-y: auto;
+      color: var(--text-dim);
+    }
+
+    /* ── Two-col grid ── */
+    .two-col   { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 860px)  { .two-col   { grid-template-columns: 1fr; } }
+
+    /* ── Sub-section headers ── */
+    .sub-hd { font-size: 14px; font-weight: 600; margin: 24px 0 12px; }
+
+    /* ── Spacer ── */
+    .mt16 { margin-top: 16px; }
+    .mt24 { margin-top: 24px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 600px) {
+      .app-main { padding: 12px; }
+      .app-header { padding: 0 12px; }
+      .tab-btn { padding: 0 12px; font-size: 12px; }
+      .app-header-center { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Login overlay ── -->
+<div class="login-overlay" id="login-overlay">
+  <div class="login-card">
+    <div class="login-logo">⬡</div>
+    <h1>V2Ray Platform</h1>
+    <p>Sign in to your admin console</p>
+    <div class="field">
+      <label for="admin-email">Email</label>
+      <input id="admin-email" type="email" placeholder="admin@example.com" autocomplete="username">
+    </div>
+    <div class="field">
+      <label for="admin-password">Password</label>
+      <input id="admin-password" type="password" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button id="login-btn" class="btn btn-primary">Sign in</button>
+    <div class="login-error" id="login-error"></div>
+    <div class="login-divider">or use legacy token</div>
+    <div class="field">
+      <label for="legacy-token">Admin token</label>
+      <input id="legacy-token" placeholder="dev-admin-token">
+    </div>
+  </div>
+</div>
+
+<!-- ── App header ── -->
+<header class="app-header">
+  <div class="app-brand">
+    <span class="app-brand-icon">⬡</span>
+    <span class="app-brand-name">V2Ray <em>Platform</em></span>
+  </div>
+  <div class="app-header-center" id="session-status">Not logged in.</div>
+  <div class="app-header-right">
+    <button id="refresh-btn" class="btn btn-ghost btn-sm" title="Refresh dashboard">↻ Refresh</button>
+    <button id="logout-btn" class="btn btn-ghost btn-sm">Logout</button>
+    <button id="logout-all-btn" class="btn btn-ghost btn-sm">Logout all</button>
+  </div>
+</header>
+
+<!-- ── Tab navigation ── -->
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="nodes">Nodes</button>
+  <button class="tab-btn" data-tab="members">Members</button>
+  <button class="tab-btn" data-tab="grants">Grants</button>
+  <button class="tab-btn" data-tab="groups">Groups</button>
+  <button class="tab-btn" data-tab="usage">Usage</button>
+  <button class="tab-btn" data-tab="tokens">Bootstrap Tokens</button>
+  <button class="tab-btn" data-tab="logs">Logs & Alerts</button>
+  <button class="tab-btn" data-tab="settings">Settings</button>
+</nav>
+
+<main class="app-main">
+
+  <!-- ════════════════ NODES ════════════════ -->
+  <section class="tab-content active" id="tab-nodes">
+    <div class="section-hd">
+      <div><h2>Nodes</h2><p>Manage your V2Ray nodes and bootstrap tokens</p></div>
+    </div>
+
+    <!-- Create bootstrap token -->
+    <div class="create-panel">
+      <button class="cp-toggle" data-panel="bootstrap">
+        ＋ Create bootstrap token
+        <span class="cp-arrow">＋</span>
+      </button>
+      <div class="cp-body" id="panel-bootstrap">
+        <div class="form-row">
+          <div class="field grow">
+            <label for="bootstrap-description">Description</label>
+            <input id="bootstrap-description" placeholder="aws-ap-southeast-1">
+          </div>
+          <div class="field" style="min-width:100px">
+            <label for="bootstrap-ttl">TTL (hours)</label>
+            <input id="bootstrap-ttl" type="number" value="24">
+          </div>
+          <div class="field" style="align-self:flex-end">
+            <button id="create-bootstrap-btn" class="btn btn-primary">Create token</button>
+          </div>
+        </div>
+        <pre class="output-pre" id="bootstrap-output"></pre>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input id="node-search" placeholder="Search name / host / provider / tag…">
+      <select id="node-status-filter">
+        <option value="">All status</option>
+        <option value="online">Online</option>
+        <option value="provisioning">Provisioning</option>
+        <option value="degraded">Degraded</option>
+      </select>
+      <input id="node-region-filter" placeholder="Region…">
+      <input id="node-tag-filter" placeholder="Tag…">
+    </div>
+    <div class="toolbar-actions">
+      <button id="batch-rebuild-nodes-btn" class="btn btn-secondary btn-sm">↺ Rebuild selected</button>
+      <select id="assign-group-select"></select>
+      <button id="assign-group-btn" class="btn btn-secondary btn-sm">Assign to group</button>
+      <button id="export-nodes-btn" class="btn btn-secondary btn-sm">↓ Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="checkbox-cell"><input type="checkbox" data-select-all="node"></th>
+            <th>Name</th><th>Status</th><th>Region</th><th>Host</th><th>Tags</th><th>Groups</th><th>Config</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="nodes-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ════════════════ MEMBERS ════════════════ -->
+  <section class="tab-content" id="tab-members">
+    <div class="section-hd">
+      <div><h2>Members</h2><p>Manage access members and their permissions</p></div>
+    </div>
+
+    <div class="create-panel">
+      <button class="cp-toggle" data-panel="member">
+        ＋ Create member
+        <span class="cp-arrow">＋</span>
+      </button>
+      <div class="cp-body" id="panel-member">
+        <div class="form-row">
+          <div class="field grow">
+            <label for="member-name">Name</label>
+            <input id="member-name" placeholder="Alice">
+          </div>
+          <div class="field grow">
+            <label for="member-email">Email</label>
+            <input id="member-email" placeholder="alice@example.com">
+          </div>
+          <div class="field grow">
+            <label for="member-note">Note</label>
+            <input id="member-note" placeholder="Team A">
+          </div>
+          <div class="field" style="align-self:flex-end">
+            <button id="create-member-btn" class="btn btn-primary">Create</button>
+          </div>
+        </div>
+        <pre class="output-pre" id="member-output"></pre>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input id="member-search" placeholder="Search name / email / note…">
+      <select id="member-status-filter">
+        <option value="">All statuses</option>
+        <option value="active">Active</option>
+        <option value="suspended">Suspended</option>
+        <option value="expired">Expired</option>
+      </select>
+    </div>
+    <div class="toolbar-actions">
+      <button id="batch-delete-members-btn" class="btn btn-danger btn-sm">✕ Delete selected</button>
+      <button id="export-members-btn" class="btn btn-secondary btn-sm">↓ Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="checkbox-cell"><input type="checkbox" data-select-all="member"></th>
+            <th>Name</th><th>Email</th><th>Note</th><th>Status</th><th>Expires</th><th>Quota (GB)</th><th>Created</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="members-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ════════════════ GRANTS ════════════════ -->
+  <section class="tab-content" id="tab-grants">
+    <div class="section-hd">
+      <div><h2>Grants</h2><p>Node access grants per member</p></div>
+    </div>
+
+    <div class="create-panel">
+      <button class="cp-toggle" data-panel="grant">
+        ＋ Create grant
+        <span class="cp-arrow">＋</span>
+      </button>
+      <div class="cp-body" id="panel-grant">
+        <div class="form-row">
+          <div class="field grow">
+            <label for="grant-node">Node</label>
+            <select id="grant-node"></select>
+          </div>
+          <div class="field grow">
+            <label for="grant-member">Member</label>
+            <select id="grant-member"></select>
+          </div>
+          <div class="field" style="align-self:flex-end">
+            <button id="create-grant-btn" class="btn btn-primary">Grant access</button>
+          </div>
+        </div>
+        <pre class="output-pre" id="grant-output"></pre>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input id="grant-search" placeholder="Search member / email / node…">
+    </div>
+    <div class="toolbar-actions">
+      <button id="batch-revoke-grants-btn" class="btn btn-danger btn-sm">✕ Revoke selected</button>
+      <button id="export-grants-btn" class="btn btn-secondary btn-sm">↓ Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="checkbox-cell"><input type="checkbox" data-select-all="grant"></th>
+            <th>Member</th><th>Node</th><th>Created</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="grants-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ════════════════ GROUPS ════════════════ -->
+  <section class="tab-content" id="tab-groups">
+    <div class="section-hd">
+      <div><h2>Node Groups</h2><p>Manage node groups and group-level member access</p></div>
+    </div>
+    <div class="two-col">
+      <div class="create-panel">
+        <button class="cp-toggle" data-panel="nodegroup">
+          ＋ Create node group
+          <span class="cp-arrow">＋</span>
+        </button>
+        <div class="cp-body" id="panel-nodegroup">
+          <div class="field">
+            <label for="node-group-name">Name</label>
+            <input id="node-group-name" placeholder="friends">
+          </div>
+          <div class="field">
+            <label for="node-group-description">Description</label>
+            <textarea id="node-group-description" rows="2" placeholder="Friends-only nodes"></textarea>
+          </div>
+          <button id="create-node-group-btn" class="btn btn-primary mt16">Create group</button>
+          <pre class="output-pre" id="node-group-output"></pre>
+        </div>
+      </div>
+      <div class="create-panel">
+        <button class="cp-toggle" data-panel="groupgrant">
+          ＋ Grant member to node group
+          <span class="cp-arrow">＋</span>
+        </button>
+        <div class="cp-body" id="panel-groupgrant">
+          <div class="field">
+            <label for="group-grant-group">Group</label>
+            <select id="group-grant-group"></select>
+          </div>
+          <div class="field">
+            <label for="group-grant-member">Member</label>
+            <select id="group-grant-member"></select>
+          </div>
+          <button id="create-group-grant-btn" class="btn btn-primary mt16">Grant group access</button>
+          <pre class="output-pre" id="group-grant-output"></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="sub-hd">Group grants</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Group</th><th>Member</th><th>Created</th><th></th></tr>
+        </thead>
+        <tbody id="group-grants-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ════════════════ USAGE ════════════════ -->
+  <section class="tab-content" id="tab-usage">
+    <div class="section-hd">
+      <div><h2>Usage</h2><p>Traffic usage summaries by node and member</p></div>
+    </div>
+    <div class="two-col">
+      <div>
+        <div class="sub-hd" style="margin-top:0">Node usage</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Node</th><th>Uplink</th><th>Downlink</th><th>Total</th><th>Samples</th></tr>
+            </thead>
+            <tbody id="node-usage-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <div class="sub-hd" style="margin-top:0">Member usage</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Member</th><th>Uplink</th><th>Downlink</th><th>Total</th><th>Samples</th></tr>
+            </thead>
+            <tbody id="member-usage-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════ BOOTSTRAP TOKENS ════════════════ -->
+  <section class="tab-content" id="tab-tokens">
+    <div class="section-hd">
+      <div><h2>Bootstrap Tokens</h2><p>One-time tokens used for node registration</p></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Description</th><th>Expires</th><th>Used at</th><th>Created</th></tr>
+        </thead>
+        <tbody id="bootstrap-tokens-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ════════════════ LOGS & ALERTS ════════════════ -->
+  <section class="tab-content" id="tab-logs">
+    <div class="section-hd">
+      <div><h2>Logs & Alerts</h2><p>System alerts, sync events, and audit trail</p></div>
+    </div>
+
+    <div class="sub-hd" style="margin-top:0">Alerts</div>
+    <div class="table-wrap mt16" style="margin-bottom:24px">
+      <table>
+        <thead>
+          <tr><th>Status</th><th>Severity</th><th>Title</th><th>Target</th><th>Last seen</th></tr>
+        </thead>
+        <tbody id="alerts-body"></tbody>
+      </table>
+    </div>
+
+    <div class="sub-hd">Sync events</div>
+    <div class="table-wrap" style="margin-bottom:24px">
+      <table>
+        <thead>
+          <tr><th>Node</th><th>Version</th><th>Success</th><th>Message</th><th>At</th></tr>
+        </thead>
+        <tbody id="sync-events-body"></tbody>
+      </table>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="sub-hd" style="margin:0">Audit logs</div>
+      <button id="export-audit-logs-btn" class="btn btn-secondary btn-sm">↓ Export CSV</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Action</th><th>Target</th><th>Actor</th><th>At</th><th>Payload</th></tr>
+        </thead>
+        <tbody id="audit-logs-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ════════════════ SETTINGS ════════════════ -->
+  <section class="tab-content" id="tab-settings">
+    <div class="section-hd">
+      <div><h2>Settings</h2><p>Session and authentication management</p></div>
+    </div>
+    <div style="max-width:480px">
+      <div class="card">
+        <div class="card-title">Current session</div>
+        <p style="font-size:13px;color:var(--text-dim);margin:0 0 16px" id="settings-session-note">
+          Session info is shown in the header bar above.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" onclick="document.querySelector('#logout-btn').click()">Logout current session</button>
+          <button class="btn btn-secondary btn-sm" onclick="document.querySelector('#logout-all-btn').click()">Logout all sessions</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+    const els = {
+      adminEmail: document.querySelector('#admin-email'),
+      adminPassword: document.querySelector('#admin-password'),
+      legacyToken: document.querySelector('#legacy-token'),
+      sessionStatus: document.querySelector('#session-status'),
+      bootstrapTokensBody: document.querySelector('#bootstrap-tokens-body'),
+      nodeSearch: document.querySelector('#node-search'),
+      nodeStatusFilter: document.querySelector('#node-status-filter'),
+      nodeRegionFilter: document.querySelector('#node-region-filter'),
+      nodeTagFilter: document.querySelector('#node-tag-filter'),
+      memberSearch: document.querySelector('#member-search'),
+      memberStatusFilter: document.querySelector('#member-status-filter'),
+      grantSearch: document.querySelector('#grant-search'),
+      nodesBody: document.querySelector('#nodes-body'),
+      membersBody: document.querySelector('#members-body'),
+      grantsBody: document.querySelector('#grants-body'),
+      groupGrantsBody: document.querySelector('#group-grants-body'),
+      syncEventsBody: document.querySelector('#sync-events-body'),
+      alertsBody: document.querySelector('#alerts-body'),
+      auditLogsBody: document.querySelector('#audit-logs-body'),
+      nodeUsageBody: document.querySelector('#node-usage-body'),
+      memberUsageBody: document.querySelector('#member-usage-body'),
+      grantNode: document.querySelector('#grant-node'),
+      grantMember: document.querySelector('#grant-member'),
+      groupGrantGroup: document.querySelector('#group-grant-group'),
+      groupGrantMember: document.querySelector('#group-grant-member'),
+      assignGroupSelect: document.querySelector('#assign-group-select'),
+    };
+
+    let refreshTimer = 0;
+
+    els.adminEmail.value = localStorage.getItem('adminEmail') || '';
+    els.legacyToken.value = localStorage.getItem('legacyAdminToken') || '';
+
+    function getSessionToken() {
+      return localStorage.getItem('sessionToken') || '';
+    }
+
+    function buildURL(path, params) {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(params || {})) {
+        const trimmed = String(value || '').trim();
+        if (trimmed) query.set(key, trimmed);
+      }
+      const suffix = query.toString();
+      return suffix ? `${path}?${suffix}` : path;
+    }
+
+    async function api(path, options = {}) {
+      const headers = new Headers(options.headers || {});
+      const sessionToken = getSessionToken();
+      if (sessionToken) {
+        headers.set('Authorization', `Bearer ${sessionToken}`);
+      } else if (els.legacyToken.value.trim()) {
+        headers.set('X-Admin-Token', els.legacyToken.value.trim());
+      }
+      if (options.body && !headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+      }
+      const response = await fetch(path, { ...options, headers });
+      const payload = await response.json();
+      if (!response.ok) {
+        const err = new Error(payload.error || response.statusText);
+        err.status = response.status;
+        throw err;
+      }
+      return payload;
+    }
+
+    async function apiOrEmpty(path, fallback = { items: [], count: 0 }, options = {}) {
+      try {
+        return await api(path, options);
+      } catch (error) {
+        console.error(`dashboard request failed for ${path}:`, error);
+        return fallback;
+      }
+    }
+
+    function writeJSON(selector, value) {
+      document.querySelector(selector).textContent = JSON.stringify(value, null, 2);
+    }
+
+    function fillSelect(select, items, labeler) {
+      const previousValue = select.value;
+      select.innerHTML = '';
+      for (const item of items) {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = labeler(item);
+        select.appendChild(option);
+      }
+      if (previousValue && items.some(item => item.id === previousValue)) {
+        select.value = previousValue;
+      }
+    }
+
+    function selectedValues(attributeName) {
+      return Array.from(document.querySelectorAll(`input[${attributeName}]:checked`))
+        .map(input => input.getAttribute(attributeName));
+    }
+
+    function scheduleRefresh() {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshDashboard().catch(console.error);
+      }, 250);
+    }
+
+    async function refreshSession() {
+      localStorage.setItem('adminEmail', els.adminEmail.value.trim());
+      localStorage.setItem('legacyAdminToken', els.legacyToken.value.trim());
+      const token = getSessionToken();
+      if (!token) {
+        els.sessionStatus.textContent = els.legacyToken.value.trim() ? 'Using legacy admin token fallback.' : 'Not logged in.';
+        return;
+      }
+      try {
+        const session = await api('/api/admin/session');
+        const warning = (session.warnings || []).length ? ` Warning: ${session.warnings.join(' ')}` : '';
+        const location = session.revision ? ` [store=${session.store_mode || 'unknown'}, revision=${session.revision}${session.service ? `, service=${session.service}` : ''}]` : ` [store=${session.store_mode || 'unknown'}]`;
+        els.sessionStatus.textContent = `Logged in as ${session.email} until ${new Date(session.expires_at).toLocaleString()}${location}.${warning}`;
+      } catch (error) {
+        if (error.status === 401) {
+          localStorage.removeItem('sessionToken');
+          els.sessionStatus.textContent = 'Session expired. Please log in again.';
+        } else {
+          console.warn('Session check failed (transient):', error.message);
+        }
+      }
+    }
+
+    async function refreshDashboard() {
+      await refreshSession();
+      const nodeListURL = buildURL('/api/admin/nodes', {
+        q: els.nodeSearch.value,
+        status: els.nodeStatusFilter.value,
+        region: els.nodeRegionFilter.value,
+        tag: els.nodeTagFilter.value,
+      });
+      const memberListURL = buildURL('/api/admin/members', {
+        q: els.memberSearch.value,
+        status: els.memberStatusFilter.value,
+      });
+      const grantListURL = buildURL('/api/admin/grants', {
+        q: els.grantSearch.value,
+      });
+      const [
+        bootstrapTokens,
+        grants,
+        groupGrants,
+        nodeGroups,
+        nodeGroupMemberships,
+        alerts,
+        auditLogs,
+        nodeUsage,
+        memberUsage,
+        nodes,
+        members,
+        syncEvents,
+        allNodes,
+        allMembers,
+      ] = await Promise.all([
+        apiOrEmpty('/api/admin/bootstrap-tokens'),
+        apiOrEmpty(grantListURL),
+        apiOrEmpty('/api/admin/node-group-grants'),
+        apiOrEmpty('/api/admin/node-groups'),
+        apiOrEmpty('/api/admin/node-group-memberships'),
+        apiOrEmpty('/api/admin/alerts'),
+        apiOrEmpty('/api/admin/audit-logs'),
+        apiOrEmpty('/api/admin/usage/nodes'),
+        apiOrEmpty('/api/admin/usage/members'),
+        apiOrEmpty(nodeListURL),
+        apiOrEmpty(memberListURL),
+        apiOrEmpty('/api/admin/sync-events'),
+        apiOrEmpty('/api/admin/nodes'),
+        apiOrEmpty('/api/admin/members'),
+      ]);
+
+      els.bootstrapTokensBody.innerHTML = '';
+      for (const token of bootstrapTokens.items) {
+        const row = document.createElement('tr');
+        row.innerHTML = `<td>${token.description}</td><td>${token.expires_at ? new Date(token.expires_at).toLocaleString() : '—'}</td><td>${token.used_at ? new Date(token.used_at).toLocaleString() : '<span class="badge badge-active">Unused</span>'}</td><td>${new Date(token.created_at).toLocaleString()}</td>`;
+        els.bootstrapTokensBody.appendChild(row);
+      }
+
+      const groupNamesByNode = {};
+      for (const membership of nodeGroupMemberships.items) {
+        if (!groupNamesByNode[membership.node_id]) groupNamesByNode[membership.node_id] = [];
+        groupNamesByNode[membership.node_id].push(membership.group_name);
+      }
+      els.nodesBody.innerHTML = '';
+      for (const node of nodes.items) {
+        const statusBadge = `<span class="badge badge-${node.status || 'offline'}">${node.status || 'unknown'}</span>`;
+        const row = document.createElement('tr');
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-node-select="${node.id}"></td><td><strong>${node.name}</strong></td><td>${statusBadge}</td><td>${node.region}</td><td style="color:var(--text-dim)">${node.public_host || '—'}</td><td style="color:var(--text-dim)">${(node.tags || []).join(', ') || '—'}</td><td style="color:var(--text-dim)">${(groupNamesByNode[node.id] || []).join(', ') || '—'}</td><td style="color:var(--text-muted)">${node.current_config_version}</td><td><button class="btn btn-secondary btn-xs" data-node-rebuild="${node.id}">↺ Rebuild</button></td>`;
+        els.nodesBody.appendChild(row);
+      }
+
+      els.membersBody.innerHTML = '';
+      for (const member of members.items) {
+        const badge = `<span class="badge badge-${member.status || 'active'}">${member.status || 'active'}</span>`;
+        const expires = member.expires_at ? new Date(member.expires_at).toLocaleDateString() : '—';
+        const quotaGB = member.quota_bytes_limit > 0 ? (member.quota_bytes_limit / 1e9).toFixed(0) : '—';
+        const isSuspended = member.status === 'suspended';
+        const toggleLabel = isSuspended ? 'Activate' : 'Suspend';
+        const toggleStatus = isSuspended ? 'active' : 'suspended';
+        const row = document.createElement('tr');
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
+        els.membersBody.appendChild(row);
+      }
+
+      els.grantsBody.innerHTML = '';
+      for (const grant of grants.items) {
+        const row = document.createElement('tr');
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-grant-select="${grant.id}"></td><td>${grant.member_name} <span style="color:var(--text-muted)">&lt;${grant.member_email}&gt;</span></td><td style="color:var(--text-dim)">${grant.node_name}</td><td style="color:var(--text-muted)">${new Date(grant.created_at).toLocaleString()}</td><td><button class="btn btn-danger btn-xs" data-grant-delete="${grant.id}">✕ Revoke</button></td>`;
+        els.grantsBody.appendChild(row);
+      }
+
+      els.groupGrantsBody.innerHTML = '';
+      for (const grant of groupGrants.items) {
+        const row = document.createElement('tr');
+        row.innerHTML = `<td>${grant.group_name}</td><td>${grant.member_name} <span style="color:var(--text-muted)">&lt;${grant.member_email}&gt;</span></td><td style="color:var(--text-muted)">${new Date(grant.created_at).toLocaleString()}</td><td><button class="btn btn-danger btn-xs" data-group-grant-delete="${grant.group_id}" data-group-grant-member="${grant.member_id}">✕ Revoke</button></td>`;
+        els.groupGrantsBody.appendChild(row);
+      }
+
+      els.syncEventsBody.innerHTML = '';
+      for (const event of syncEvents.items) {
+        const successBadge = event.success ? '<span class="badge-yes">Yes</span>' : '<span class="badge-no">No</span>';
+        const row = document.createElement('tr');
+        row.innerHTML = `<td style="color:var(--text-dim)">${event.node_id}</td><td>${event.config_version}</td><td>${successBadge}</td><td style="color:var(--text-muted)">${event.message}</td><td style="color:var(--text-muted)">${new Date(event.occurred_at).toLocaleString()}</td>`;
+        els.syncEventsBody.appendChild(row);
+      }
+
+      els.auditLogsBody.innerHTML = '';
+      for (const log of auditLogs.items) {
+        const row = document.createElement('tr');
+        row.innerHTML = `<td><strong>${log.action}</strong></td><td style="color:var(--text-dim)">${log.target_type}:${log.target_id}</td><td style="color:var(--text-muted)">${log.actor_admin_id || '—'}</td><td style="color:var(--text-muted)">${new Date(log.created_at).toLocaleString()}</td><td><code>${log.payload}</code></td>`;
+        els.auditLogsBody.appendChild(row);
+      }
+
+      els.alertsBody.innerHTML = '';
+      for (const alert of alerts.items) {
+        const statusBadge = `<span class="badge badge-${alert.status === 'ok' ? 'ok' : 'firing'}">${alert.status}</span>`;
+        const row = document.createElement('tr');
+        row.innerHTML = `<td>${statusBadge}</td><td style="color:var(--text-dim)">${alert.severity}</td><td>${alert.title}</td><td style="color:var(--text-muted)">${alert.target_type}:${alert.target_id}</td><td style="color:var(--text-muted)">${new Date(alert.last_seen_at).toLocaleString()}</td>`;
+        els.alertsBody.appendChild(row);
+      }
+
+      els.nodeUsageBody.innerHTML = '';
+      for (const item of nodeUsage.items) {
+        const row = document.createElement('tr');
+        row.innerHTML = `<td><strong>${item.node_name}</strong></td><td style="color:var(--text-dim)">${item.uplink_bytes}</td><td style="color:var(--text-dim)">${item.downlink_bytes}</td><td>${item.total_bytes}</td><td style="color:var(--text-muted)">${item.snapshot_count}</td>`;
+        els.nodeUsageBody.appendChild(row);
+      }
+
+      els.memberUsageBody.innerHTML = '';
+      for (const item of memberUsage.items) {
+        const row = document.createElement('tr');
+        row.innerHTML = `<td><strong>${item.member_name}</strong> <span style="color:var(--text-muted)">&lt;${item.member_email}&gt;</span></td><td style="color:var(--text-dim)">${item.uplink_bytes}</td><td style="color:var(--text-dim)">${item.downlink_bytes}</td><td>${item.total_bytes}</td><td style="color:var(--text-muted)">${item.snapshot_count}</td>`;
+        els.memberUsageBody.appendChild(row);
+      }
+
+      fillSelect(els.grantNode, allNodes.items, node => `${node.name} (${node.region})`);
+      fillSelect(els.grantMember, allMembers.items, member => `${member.name} <${member.email}>`);
+      fillSelect(els.groupGrantGroup, nodeGroups.items, group => group.name);
+      fillSelect(els.groupGrantMember, allMembers.items, member => `${member.name} <${member.email}>`);
+      fillSelect(els.assignGroupSelect, [{ id: '', name: '— clear groups —' }, ...nodeGroups.items], group => group.name);
+      document.querySelectorAll('[data-select-all]').forEach(input => { input.checked = false; });
+    }
+
+    async function updateMember(memberID, patch) {
+      await api(`/api/admin/members/${memberID}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+      await refreshDashboard();
+    }
+
+    document.querySelector('#login-btn').addEventListener('click', async () => {
+      const errEl = document.querySelector('#login-error');
+      errEl.textContent = '';
+      try {
+        const payload = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: els.adminEmail.value.trim(),
+            password: els.adminPassword.value,
+          }),
+        }).then(async response => {
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || response.statusText);
+          return body;
+        });
+        localStorage.setItem('sessionToken', payload.session_token);
+        els.adminPassword.value = '';
+        document.querySelector('#login-overlay').classList.add('hidden');
+        switchTab('nodes');
+        await refreshDashboard();
+      } catch (error) {
+        errEl.textContent = error.message;
+      }
+    });
+
+    document.querySelector('#logout-btn').addEventListener('click', async () => {
+      const sessionToken = getSessionToken();
+      if (sessionToken) {
+        try {
+          await api('/api/admin/logout', { method: 'POST' });
+        } catch {}
+      }
+      localStorage.removeItem('sessionToken');
+      await refreshSession();
+      document.querySelector('#login-overlay').classList.remove('hidden');
+    });
+
+    document.querySelector('#logout-all-btn').addEventListener('click', async () => {
+      try {
+        await api('/api/admin/logout-all', { method: 'POST' });
+        localStorage.removeItem('sessionToken');
+        await refreshSession();
+        document.querySelector('#login-overlay').classList.remove('hidden');
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.querySelector('#refresh-btn').addEventListener('click', async () => {
+      try {
+        await refreshDashboard();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.querySelector('#create-bootstrap-btn').addEventListener('click', async () => {
+      try {
+        const payload = await api('/api/admin/bootstrap-tokens', {
+          method: 'POST',
+          body: JSON.stringify({
+            description: document.querySelector('#bootstrap-description').value,
+            ttl_hours: Number(document.querySelector('#bootstrap-ttl').value),
+          }),
+        });
+        writeJSON('#bootstrap-output', payload);
+        await refreshDashboard();
+      } catch (error) {
+        writeJSON('#bootstrap-output', { error: error.message });
+      }
+    });
+
+    document.querySelector('#create-member-btn').addEventListener('click', async () => {
+      try {
+        const payload = await api('/api/admin/members', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: document.querySelector('#member-name').value,
+            email: document.querySelector('#member-email').value,
+            note: document.querySelector('#member-note').value,
+          }),
+        });
+        writeJSON('#member-output', payload);
+        await refreshDashboard();
+      } catch (error) {
+        writeJSON('#member-output', { error: error.message });
+      }
+    });
+
+    document.querySelector('#create-grant-btn').addEventListener('click', async () => {
+      try {
+        const payload = await api('/api/admin/grants', {
+          method: 'POST',
+          body: JSON.stringify({
+            node_id: els.grantNode.value,
+            member_id: els.grantMember.value,
+          }),
+        });
+        writeJSON('#grant-output', payload);
+        await refreshDashboard();
+      } catch (error) {
+        writeJSON('#grant-output', { error: error.message });
+      }
+    });
+
+    document.querySelector('#create-node-group-btn').addEventListener('click', async () => {
+      try {
+        const payload = await api('/api/admin/node-groups', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: document.querySelector('#node-group-name').value,
+            description: document.querySelector('#node-group-description').value,
+          }),
+        });
+        writeJSON('#node-group-output', payload);
+        await refreshDashboard();
+      } catch (error) {
+        writeJSON('#node-group-output', { error: error.message });
+      }
+    });
+
+    document.querySelector('#create-group-grant-btn').addEventListener('click', async () => {
+      try {
+        const payload = await api(`/api/admin/node-groups/${els.groupGrantGroup.value}/grants`, {
+          method: 'POST',
+          body: JSON.stringify({ member_id: els.groupGrantMember.value }),
+        });
+        writeJSON('#group-grant-output', payload);
+        await refreshDashboard();
+      } catch (error) {
+        writeJSON('#group-grant-output', { error: error.message });
+      }
+    });
+
+    document.querySelector('#batch-delete-members-btn').addEventListener('click', async () => {
+      const memberIDs = selectedValues('data-member-select');
+      if (memberIDs.length === 0) {
+        alert('Select at least one member.');
+        return;
+      }
+      if (!confirm(`Delete ${memberIDs.length} selected members and revoke all related grants?`)) return;
+      try {
+        await api('/api/admin/members/batch-delete', {
+          method: 'POST',
+          body: JSON.stringify({ member_ids: memberIDs }),
+        });
+        await refreshDashboard();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.querySelector('#batch-revoke-grants-btn').addEventListener('click', async () => {
+      const grantIDs = selectedValues('data-grant-select');
+      if (grantIDs.length === 0) {
+        alert('Select at least one grant.');
+        return;
+      }
+      if (!confirm(`Revoke ${grantIDs.length} selected grants?`)) return;
+      try {
+        await api('/api/admin/grants/batch-revoke', {
+          method: 'POST',
+          body: JSON.stringify({ grant_ids: grantIDs }),
+        });
+        await refreshDashboard();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.querySelector('#batch-rebuild-nodes-btn').addEventListener('click', async () => {
+      const nodeIDs = selectedValues('data-node-select');
+      if (nodeIDs.length === 0) {
+        alert('Select at least one node.');
+        return;
+      }
+      try {
+        await api('/api/admin/nodes/batch-rebuild', {
+          method: 'POST',
+          body: JSON.stringify({ node_ids: nodeIDs }),
+        });
+        await refreshDashboard();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    document.querySelector('#assign-group-btn').addEventListener('click', async () => {
+      const nodeIDs = selectedValues('data-node-select');
+      if (nodeIDs.length === 0) {
+        alert('Select at least one node.');
+        return;
+      }
+      try {
+        await Promise.all(nodeIDs.map(nodeID => api(`/api/admin/nodes/${nodeID}/groups`, {
+          method: 'POST',
+          body: JSON.stringify({ group_ids: els.assignGroupSelect.value ? [els.assignGroupSelect.value] : [] }),
+        })));
+        await refreshDashboard();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
+    async function downloadExport(path, filename) {
+      const headers = new Headers();
+      const sessionToken = getSessionToken();
+      if (sessionToken) {
+        headers.set('Authorization', `Bearer ${sessionToken}`);
+      } else if (els.legacyToken.value.trim()) {
+        headers.set('X-Admin-Token', els.legacyToken.value.trim());
+      }
+      const response = await fetch(path, { headers });
+      if (!response.ok) {
+        const payload = await response.json();
+        throw new Error(payload.error || response.statusText);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    document.querySelector('#export-nodes-btn').addEventListener('click', async () => {
+      try { await downloadExport('/api/admin/export/nodes?format=csv', 'nodes.csv'); } catch (error) { alert(error.message); }
+    });
+    document.querySelector('#export-members-btn').addEventListener('click', async () => {
+      try { await downloadExport('/api/admin/export/members?format=csv', 'members.csv'); } catch (error) { alert(error.message); }
+    });
+    document.querySelector('#export-grants-btn').addEventListener('click', async () => {
+      try { await downloadExport('/api/admin/export/grants?format=csv', 'grants.csv'); } catch (error) { alert(error.message); }
+    });
+    document.querySelector('#export-audit-logs-btn').addEventListener('click', async () => {
+      try { await downloadExport('/api/admin/export/audit-logs?format=csv', 'audit-logs.csv'); } catch (error) { alert(error.message); }
+    });
+
+    document.addEventListener('click', async (event) => {
+      const memberID = event.target?.dataset?.memberDelete;
+      if (memberID) {
+        if (!confirm('Delete this member and revoke all related grants?')) return;
+        try {
+          await api(`/api/admin/members/${memberID}`, { method: 'DELETE' });
+          await refreshDashboard();
+        } catch (error) {
+          alert(error.message);
+        }
+        return;
+      }
+
+      const toggleID = event.target?.dataset?.memberToggle;
+      if (toggleID) {
+        const newStatus = event.target.dataset.toggleStatus;
+        try {
+          await updateMember(toggleID, { status: newStatus });
+        } catch (error) {
+          alert(error.message);
+        }
+        return;
+      }
+
+      const expiryID = event.target?.dataset?.memberExpiry;
+      if (expiryID) {
+        const val = prompt('Set expiry date (YYYY-MM-DD) or leave blank to clear:');
+        if (val === null) return;
+        try {
+          const patch = val.trim() === '' ? { expires_at: '' } : { expires_at: new Date(val + 'T00:00:00Z').toISOString() };
+          await updateMember(expiryID, patch);
+        } catch (error) {
+          alert(error.message);
+        }
+        return;
+      }
+
+      const grantID = event.target?.dataset?.grantDelete;
+      if (grantID) {
+        if (!confirm('Revoke this grant?')) return;
+        try {
+          await api(`/api/admin/grants/${grantID}`, { method: 'DELETE' });
+          await refreshDashboard();
+        } catch (error) {
+          alert(error.message);
+        }
+      }
+
+      const groupGrantGroup = event.target?.dataset?.groupGrantDelete;
+      const groupGrantMember = event.target?.dataset?.groupGrantMember;
+      if (groupGrantGroup && groupGrantMember) {
+        try {
+          await api(`/api/admin/node-groups/${groupGrantGroup}/grants/${groupGrantMember}`, { method: 'DELETE' });
+          await refreshDashboard();
+        } catch (error) {
+          alert(error.message);
+        }
+      }
+
+      const nodeID = event.target?.dataset?.nodeRebuild;
+      if (nodeID) {
+        try {
+          await api(`/api/admin/nodes/${nodeID}/rebuild-config`, { method: 'POST' });
+          await refreshDashboard();
+        } catch (error) {
+          alert(error.message);
+        }
+      }
+    });
+
+    document.addEventListener('change', (event) => {
+      const selectAll = event.target?.dataset?.selectAll;
+      if (!selectAll) return;
+      document.querySelectorAll(`input[data-${selectAll}-select]`).forEach(input => {
+        input.checked = event.target.checked;
+      });
+    });
+
+    [
+      els.nodeSearch,
+      els.nodeStatusFilter,
+      els.nodeRegionFilter,
+      els.nodeTagFilter,
+      els.memberSearch,
+      els.memberStatusFilter,
+      els.grantSearch,
+    ].forEach(input => {
+      input.addEventListener('input', scheduleRefresh);
+      input.addEventListener('change', scheduleRefresh);
+    });
+
+    // ── Tab navigation ──
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+      document.querySelectorAll('.tab-content').forEach(s => s.classList.toggle('active', s.id === 'tab-' + name));
+    }
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    // ── Collapsible panels ──
+    document.querySelectorAll('.cp-toggle').forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const body = document.getElementById('panel-' + toggle.dataset.panel);
+        if (!body) return;
+        const open = body.classList.toggle('open');
+        toggle.classList.toggle('open', open);
+      });
+    });
+
+    // ── Login overlay ──
+    const loginOverlay = document.querySelector('#login-overlay');
+    function updateLoginOverlay() {
+      const loggedIn = !!getSessionToken() || !!els.legacyToken.value.trim();
+      loginOverlay.classList.toggle('hidden', loggedIn);
+    }
+    els.legacyToken.addEventListener('input', updateLoginOverlay);
+    updateLoginOverlay();
+
+    // ── Initial load ──
+    if (getSessionToken() || els.legacyToken.value.trim()) {
+      refreshDashboard().catch(console.error);
+    }
+  </script>
+</body>
+</html>

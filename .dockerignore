@@ -1,0 +1,7 @@
+.git
+.gitignore
+.tmp-agent-state.json
+.tmp-config.json
+node_modules
+README.md
+deploy/*.log
