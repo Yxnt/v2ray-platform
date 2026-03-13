@@ -140,13 +140,24 @@ Collect real usage from local V2Ray/Xray stats:
 ```sh
 export NODE_USAGE_SOURCE=runtime
 export NODE_USAGE_QUERY_SERVER=127.0.0.1:10085
+export NODE_USAGE_QUERY_COMMAND="/usr/local/v2ray/v2ray api stats --server=127.0.0.1:10085 -json"
 export NODE_USAGE_COLLECTION_INTERVAL_SECONDS=60
 go run ./cmd/node-agent
 ```
 
-The rendered node config now enables the local stats API on `127.0.0.1:10085`, and the agent queries `v2ctl` for V2Ray or `xray api statsquery` for Xray by default. If your runtime package exposes a different CLI, override it with `NODE_USAGE_QUERY_COMMAND`.
+> **Important**: always include the `-json` flag in `NODE_USAGE_QUERY_COMMAND` when using V2Ray 5.x.
+> Without it, output is protobuf text which still works via fallback parsing, but JSON is more
+> reliable. The default install script sets this correctly.
 
-If you are upgrading an existing node, make sure it receives a freshly rendered config once so the local stats API and UUID-based stats identity are present.
+The rendered node config enables the local stats API on `127.0.0.1:10085` and records per-user
+traffic under `user>>>UUID>>>traffic>>>uplink/downlink`. The node-agent queries this every
+`NODE_USAGE_COLLECTION_INTERVAL_SECONDS` seconds (default 60), computes the delta since the last
+collection, and uploads snapshots to `/api/agent/usage`.
+
+If you are upgrading an existing node, trigger a **Rebuild** from the admin UI so the node
+receives a freshly rendered config with the stats API inbound and the correct `policy` settings.
+Per-user stats require **both** `policy.system.statsUserUplink/Downlink = true` and
+`policy.levels."0".statsUserUplink/Downlink = true`.
 
 Then inspect aggregated usage:
 
@@ -160,22 +171,96 @@ curl -sS \
   http://127.0.0.1:8080/api/admin/usage/members
 ```
 
+### Tier system and subscription
+
+Create a usage tier (bandwidth quota):
+
+```sh
+curl -sS \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <session token>' \
+  -d '{"name":"Standard","description":"50 GB/month","monthly_quota_gb":50}' \
+  http://127.0.0.1:8080/api/admin/tiers
+```
+
+A tier can be assigned to a member from the Members panel in the admin UI. Members without a tier
+have unlimited bandwidth.
+
+Each member has a unique **subscription token** that never changes. Use it to generate a dynamic
+Clash YAML subscription URL:
+
+```
+https://<control-plane-host>/api/sub/<subscription_token>
+```
+
+Users paste this URL into Clash (or any compatible client) under **Remote Profile**. Clicking
+**Refresh** in the client fetches the latest server list automatically — no manual config
+updates needed when you add or remove nodes.
+
+### Node-agent auto-update
+
+The node-agent checks its own MD5 hash against the latest GitHub Release binary on every
+heartbeat. If a mismatch is detected, the agent:
+
+1. Downloads the new binary to a temporary file.
+2. Verifies the downloaded MD5 matches the expected value.
+3. Atomically replaces the running binary (`os.Rename`).
+4. Re-execs itself via `syscall.Exec` — the process image is replaced in-place so systemd
+   continues to track the same PID.
+
+No manual intervention is required after pushing a new release.
+
+### Troubleshooting usage stats
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `usage upload failed: no user traffic counters` | No clients currently connected, or V2Ray was just restarted (stats reset) | Connect a client and generate traffic; wait up to 60 s |
+| `query command failed` | Wrong binary path or missing `--server` flag | Check `NODE_USAGE_QUERY_COMMAND` in `/etc/default/v2ray-platform-node-agent` |
+| Raw output has no `user>>>` entries | `policy.levels."0".statsUserUplink/Downlink` not set | Trigger Rebuild in admin UI; the new config template is correct |
+| `[usage]` lines never appear in `journalctl` | `NODE_USAGE_SOURCE` is `disabled` or unset | Set `NODE_USAGE_SOURCE=runtime` and restart |
+| Admin Usage page shows zeros | Snapshots stored with `member_id = NULL` | Verify the member has been granted access to the node; trigger Rebuild |
+
+To verify the stats pipeline manually on a node:
+
+```sh
+# 1. Check environment config
+grep -E 'NODE_USAGE' /etc/default/v2ray-platform-node-agent
+
+# 2. Query V2Ray stats directly
+/usr/local/v2ray/v2ray api stats --server=127.0.0.1:10085 -json | python3 -m json.tool
+
+# 3. Watch agent logs
+journalctl -u v2ray-platform-node-agent -f
+```
+
+Expected log sequence when working correctly:
+```
+[usage] collecting (source=runtime cmd="...")
+[usage] raw output (NNN bytes): {"stat":[...]}
+[usage] parsed N user counter(s)
+[usage] uploading N snapshot(s) to control plane
+[usage] upload OK
+```
+
 ## Notes
 
 - Without `DATABASE_URL`, the control plane uses an in-memory store for local iteration and signs admin sessions statelessly so they remain valid across replicas.
 - With `DATABASE_URL`, the control plane persists data in PostgreSQL.
 - PostgreSQL migrations run automatically on startup.
+- Neon.tech (and any PgBouncer in transaction mode) is supported via an internal `postgres-simple` driver that uses the simple query protocol, avoiding `prepared statement does not exist` errors.
 - `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` seed the first admin if it does not already exist.
 - Revoking a grant or deleting a member automatically rebuilds the affected node config.
-- `NODE_USAGE_SOURCE=runtime` enables real per-credential traffic collection from local runtime stats.
+- `NODE_USAGE_SOURCE=runtime` enables real per-credential traffic collection from local V2Ray/Xray stats. Default is `disabled`.
 - `NODE_USAGE_QUERY_SERVER` defaults to `127.0.0.1:10085`.
-- `NODE_USAGE_QUERY_COMMAND` can override the local stats query command when your package layout differs.
+- `NODE_USAGE_QUERY_COMMAND` overrides the stats query command. For V2Ray 5.x, use: `/usr/local/v2ray/v2ray api stats --server=127.0.0.1:10085 -json`.
+- `NODE_USAGE_COLLECTION_INTERVAL_SECONDS` defaults to `60`. The install script sets `600` (10 min) — lower it for faster feedback during testing.
 - `NODE_USAGE_INPUT_PATH` remains available as a compatibility fallback for file-based usage imports.
 - `CONTROL_PLANE_ADMIN_TOKEN` is now an explicit legacy fallback only; it is no longer enabled by default.
 - With `DATABASE_URL`, the control plane persists revocable admin sessions and supports logout of the current session or all sessions. Without it, admin tokens are still valid until expiry, but server-side logout-all/session revocation is not available.
 - Automatic lifecycle sweeps can expire members and suspend members that exceed quota.
-- The built-in admin UI now supports node/member search, filters, batch member delete, batch grant revoke, node groups, group grants, alerts, exports, explicit rebuilds, audit logs, and usage summaries.
+- The built-in admin UI supports: node/member search, filters, batch member delete, batch grant revoke, node groups, group grants, alerts, exports, explicit rebuilds, audit logs, usage summaries, tier management, and Clash subscription URL generation.
 - The V2Ray config renderer is intentionally narrow: one standard WS+VMess inbound template for the first cut.
+- The node-agent binary is published to GitHub Releases on every push to `main`. The agent self-updates on MD5 mismatch — no manual binary deployment needed after the initial install.
 
 ## Prioritized backlog
 
