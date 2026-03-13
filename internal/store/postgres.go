@@ -973,6 +973,17 @@ func (s *PostgresStore) RecordUsage(nodeToken string, snapshots []domain.UsageSn
 				return mapPQError(err2)
 			}
 		}
+		if resolvedMemberID == "" {
+			// Last resort: any member with this UUID (covers direct grants where
+			// node_credentials row may be missing after a manual UUID change).
+			err3 := tx.QueryRow(
+				`SELECT id FROM members WHERE uuid = $1 LIMIT 1`,
+				snapshot.CredentialUUID,
+			).Scan(&resolvedMemberID)
+			if err3 != nil && !errors.Is(err3, sql.ErrNoRows) {
+				return mapPQError(err3)
+			}
+		}
 		if resolvedMemberID != "" {
 			memberID = resolvedMemberID
 		}
