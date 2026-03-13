@@ -3,6 +3,7 @@ package api
 import (
 "bytes"
 "net/http"
+"strings"
 "text/template"
 )
 
@@ -141,7 +142,13 @@ chmod 0600 "${ENV_FILE}"
 
 # ── node-agent binary ─────────────────────────────────────────────────────────
 echo "Downloading node-agent..."
-curl -fsSL "${CONTROL_PLANE_URL}/node-agent" -o "${BIN_DIR}/v2ray-platform-node-agent"
+case "${ARCH}" in
+  x86_64)  AGENT_ARCH="amd64" ;;
+  aarch64) AGENT_ARCH="arm64" ;;
+  *)       echo "Unsupported architecture: ${ARCH}" >&2; exit 1 ;;
+esac
+AGENT_URL="https://github.com/Yxnt/v2ray-platform/releases/latest/download/node-agent-linux-${AGENT_ARCH}"
+curl -fsSL "${AGENT_URL}" -o "${BIN_DIR}/v2ray-platform-node-agent"
 chmod 0755 "${BIN_DIR}/v2ray-platform-node-agent"
 
 # ── node-agent systemd service ────────────────────────────────────────────────
@@ -229,5 +236,9 @@ writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 })
 return
 }
-http.Redirect(w, r, svc.agentDownloadURL, http.StatusFound)
+target := svc.agentDownloadURL
+if r.URL.Query().Get("arch") == "arm64" {
+target = strings.ReplaceAll(target, "amd64", "arm64")
+}
+http.Redirect(w, r, target, http.StatusFound)
 }
