@@ -8,6 +8,8 @@ import (
 
 type v2rayConfig struct {
 	Log       map[string]any `json:"log"`
+	Stats     map[string]any `json:"stats"`
+	API       map[string]any `json:"api"`
 	Inbounds  []any          `json:"inbounds"`
 	Outbounds []any          `json:"outbounds"`
 	Routing   map[string]any `json:"routing"`
@@ -34,8 +36,21 @@ func RenderNodeConfig(node domain.Node, creds []domain.NodeCredential) (string, 
 	wsPath := "/" + node.Name
 
 	cfg := v2rayConfig{
-		Log: map[string]any{"loglevel": "info"},
+		Log:   map[string]any{"loglevel": "info"},
+		Stats: map[string]any{},
+		API: map[string]any{
+			"tag":      "api",
+			"services": []string{"StatsService"},
+		},
 		Inbounds: []any{
+			// Stats API inbound — queried by node-agent for per-user traffic.
+			map[string]any{
+				"listen":   "127.0.0.1",
+				"port":     10085,
+				"protocol": "dokodemo-door",
+				"settings": map[string]any{"address": "127.0.0.1"},
+				"tag":      "api",
+			},
 			map[string]any{
 				"port":     23333,
 				"listen":   "127.0.0.1",
@@ -69,11 +84,22 @@ func RenderNodeConfig(node domain.Node, creds []domain.NodeCredential) (string, 
 				"settings": map[string]any{},
 				"tag":      "blocked",
 			},
+			map[string]any{
+				"tag":      "api",
+				"protocol": "freedom",
+				"settings": map[string]any{},
+			},
 		},
 		Routing: map[string]any{
 			"domainStrategy": "AsIS",
 			"domainMatcher":  "mph",
 			"rules": []any{
+				// Route stats API traffic to the api outbound tag.
+				map[string]any{
+					"type":        "field",
+					"inboundTag":  []string{"api"},
+					"outboundTag": "api",
+				},
 				map[string]any{
 					"type":        "field",
 					"outboundTag": "blocked",
@@ -117,10 +143,10 @@ func RenderNodeConfig(node domain.Node, creds []domain.NodeCredential) (string, 
 				},
 			},
 			"system": map[string]any{
-				"statsInboundUplink":    false,
-				"statsInboundDownlink":  false,
-				"statsOutboundUplink":   false,
-				"statsOutboundDownlink": false,
+				"statsInboundUplink":    true,
+				"statsInboundDownlink":  true,
+				"statsOutboundUplink":   true,
+				"statsOutboundDownlink": true,
 			},
 		},
 	}

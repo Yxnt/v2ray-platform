@@ -33,10 +33,10 @@ func TestRenderNodeConfigIncludesCredentials(t *testing.T) {
 		}
 	}
 
-	// Stats API must not be present
-	for _, absent := range []string{"StatsService", "stats-api-in", "10085", "dokodemo-door"} {
-		if strings.Contains(cfg, absent) {
-			t.Fatalf("expected config NOT to contain %q", absent)
+	// Stats API must be present
+	for _, present := range []string{"StatsService", "10085", "dokodemo-door"} {
+		if !strings.Contains(cfg, present) {
+			t.Fatalf("expected config to contain %q, got:\n%s", present, cfg)
 		}
 	}
 }
