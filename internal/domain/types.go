@@ -45,6 +45,7 @@ const (
 
 type Member struct {
 	ID              string       `json:"id"`
+	UUID            string       `json:"uuid"`
 	Name            string       `json:"name"`
 	Email           string       `json:"email"`
 	Note            string       `json:"note"`

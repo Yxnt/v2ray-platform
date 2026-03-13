@@ -278,17 +278,18 @@ func TestGroupGrantAppearsInConfigAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	derivedUUID := derivedGroupCredentialUUID(reg.NodeID, member.ID)
+	// The member's UUID is now used directly (same across all nodes).
+	memberUUID := member.UUID
 	rev, err := s.GetNodeConfig(reg.NodeToken)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(rev.Config, derivedUUID) {
-		t.Fatalf("expected derived UUID %s in config", derivedUUID)
+	if !strings.Contains(rev.Config, memberUUID) {
+		t.Fatalf("expected member UUID %s in config", memberUUID)
 	}
 
 	if err := s.RecordUsage(reg.NodeToken, []domain.UsageSnapshot{{
-		CredentialUUID: derivedUUID,
+		CredentialUUID: memberUUID,
 		UplinkBytes:    100,
 		DownlinkBytes:  200,
 	}}); err != nil {

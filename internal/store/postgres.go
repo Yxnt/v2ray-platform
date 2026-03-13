@@ -433,6 +433,7 @@ func (s *PostgresStore) CreateMember(input CreateMemberInput) (*domain.Member, e
 	now := time.Now().UTC()
 	member := &domain.Member{
 		ID:        newID("member"),
+		UUID:      newUUID(),
 		Name:      input.Name,
 		Email:     strings.ToLower(strings.TrimSpace(input.Email)),
 		Note:      input.Note,
@@ -441,9 +442,9 @@ func (s *PostgresStore) CreateMember(input CreateMemberInput) (*domain.Member, e
 		UpdatedAt: now,
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO members (id, name, email, note, status, quota_bytes_limit, disabled_reason, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		member.ID, member.Name, member.Email, member.Note,
+		`INSERT INTO members (id, uuid, name, email, note, status, quota_bytes_limit, disabled_reason, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		member.ID, member.UUID, member.Name, member.Email, member.Note,
 		member.Status, member.QuotaBytesLimit, member.DisabledReason,
 		member.CreatedAt, member.UpdatedAt,
 	)
@@ -812,7 +813,7 @@ func (s *PostgresStore) CreateGrant(input CreateGrantInput) (*domain.AccessGrant
 		NodeID:        node.ID,
 		MemberID:      member.ID,
 		AccessGrantID: grant.ID,
-		UUID:          newUUID(),
+		UUID:          member.UUID,
 		Email:         credentialEmail(member, node.ID),
 		CreatedAt:     now,
 	}
@@ -923,28 +924,19 @@ func (s *PostgresStore) RecordUsage(nodeToken string, snapshots []domain.UsageSn
 			return mapPQError(err)
 		}
 		if resolvedMemberID == "" {
-			rows, err := tx.Query(
-				`SELECT DISTINCT mg.member_id
+			// Fall back: look up by member UUID for group-access credentials.
+			err2 := tx.QueryRow(
+				`SELECT mg.member_id
 				 FROM node_group_memberships ngm
 				 JOIN member_node_group_grants mg ON mg.group_id = ngm.group_id
-				 WHERE ngm.node_id = $1`,
-				node.ID,
-			)
-			if err != nil {
-				return mapPQError(err)
+				 JOIN members m ON m.id = mg.member_id
+				 WHERE ngm.node_id = $1 AND m.uuid = $2
+				 LIMIT 1`,
+				node.ID, snapshot.CredentialUUID,
+			).Scan(&resolvedMemberID)
+			if err2 != nil && !errors.Is(err2, sql.ErrNoRows) {
+				return mapPQError(err2)
 			}
-			for rows.Next() {
-				var candidateMemberID string
-				if err := rows.Scan(&candidateMemberID); err != nil {
-					rows.Close()
-					return mapPQError(err)
-				}
-				if derivedGroupCredentialUUID(node.ID, candidateMemberID) == snapshot.CredentialUUID {
-					resolvedMemberID = candidateMemberID
-					break
-				}
-			}
-			rows.Close()
 		}
 		if resolvedMemberID != "" {
 			memberID = resolvedMemberID
@@ -986,7 +978,7 @@ func (s *PostgresStore) ListNodes() []domain.Node {
 
 func (s *PostgresStore) ListMembers() []domain.Member {
 	rows, err := s.db.Query(
-		`SELECT id, name, email, note, status, expires_at, quota_bytes_limit, disabled_reason, created_at, updated_at
+		`SELECT id, uuid, name, email, note, status, expires_at, quota_bytes_limit, disabled_reason, created_at, updated_at
 		 FROM members
 		 ORDER BY created_at ASC`,
 	)
@@ -1212,7 +1204,7 @@ func (s *PostgresStore) getNodeGroupTx(q queryRower, groupID string) (*domain.No
 
 func (s *PostgresStore) getMemberByIDTx(tx *sql.Tx, memberID string) (*domain.Member, error) {
 	row := tx.QueryRow(
-		`SELECT id, name, email, note, status, expires_at, quota_bytes_limit, disabled_reason, created_at, updated_at
+		`SELECT id, uuid, name, email, note, status, expires_at, quota_bytes_limit, disabled_reason, created_at, updated_at
 		 FROM members
 		 WHERE id = $1`,
 		memberID,
@@ -1261,7 +1253,7 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 		seenMembers[cred.MemberID] = struct{}{}
 	}
 	groupRows, err := tx.Query(
-		`SELECT DISTINCT m.id, m.name, m.email, m.note, m.status, m.expires_at, m.quota_bytes_limit, m.disabled_reason, m.created_at, m.updated_at, ngm.group_id
+		`SELECT DISTINCT m.id, m.uuid, m.name, m.email, m.note, m.status, m.expires_at, m.quota_bytes_limit, m.disabled_reason, m.created_at, m.updated_at, ngm.group_id
 		 FROM node_group_memberships ngm
 		 JOIN member_node_group_grants mg ON mg.group_id = ngm.group_id
 		 JOIN members m ON m.id = mg.member_id
@@ -1281,6 +1273,7 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 		var groupID string
 		if err := groupRows.Scan(
 			&member.ID,
+			&member.UUID,
 			&member.Name,
 			&member.Email,
 			&member.Note,
@@ -1305,7 +1298,7 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 			NodeID:        nodeID,
 			MemberID:      member.ID,
 			AccessGrantID: "group:" + groupID,
-			UUID:          derivedGroupCredentialUUID(nodeID, member.ID),
+			UUID:          member.UUID,
 			Email:         credentialEmail(&member, nodeID),
 			CreatedAt:     now,
 		})
@@ -1387,6 +1380,7 @@ func scanMember(row scanner) *domain.Member {
 	var expiresAt sql.NullTime
 	if err := row.Scan(
 		&member.ID,
+		&member.UUID,
 		&member.Name,
 		&member.Email,
 		&member.Note,

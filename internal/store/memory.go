@@ -386,6 +386,7 @@ func (s *MemoryStore) CreateMember(input CreateMemberInput) (*domain.Member, err
 	now := time.Now().UTC()
 	member := &domain.Member{
 		ID:        newID("member"),
+		UUID:      newUUID(),
 		Name:      input.Name,
 		Email:     strings.ToLower(strings.TrimSpace(input.Email)),
 		Note:      input.Note,
@@ -649,7 +650,7 @@ func (s *MemoryStore) CreateGrant(input CreateGrantInput) (*domain.AccessGrant, 
 		NodeID:        input.NodeID,
 		MemberID:      input.MemberID,
 		AccessGrantID: grant.ID,
-		UUID:          newUUID(),
+		UUID:          member.UUID,
 		Email:         credentialEmail(member, input.NodeID),
 		CreatedAt:     now,
 	}
@@ -727,7 +728,7 @@ func (s *MemoryStore) RecordUsage(nodeToken string, snapshots []domain.UsageSnap
 		if memberID == "" {
 			for groupID := range s.nodeGroupNodes[node.ID] {
 				for candidateMemberID := range s.groupGrants[groupID] {
-					if derivedGroupCredentialUUID(node.ID, candidateMemberID) == snapshot.CredentialUUID {
+					if m, ok := s.members[candidateMemberID]; ok && m.UUID == snapshot.CredentialUUID {
 						memberID = candidateMemberID
 						break
 					}
@@ -969,7 +970,7 @@ func (s *MemoryStore) rebuildNodeConfigLocked(nodeID string) (*domain.ConfigRevi
 				NodeID:        nodeID,
 				MemberID:      memberID,
 				AccessGrantID: "group:" + groupID,
-				UUID:          derivedGroupCredentialUUID(nodeID, memberID),
+				UUID:          member.UUID,
 				Email:         credentialEmail(member, nodeID),
 				CreatedAt:     now,
 			})
