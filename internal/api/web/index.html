@@ -1318,14 +1318,23 @@
       const clashMemberID = event.target?.dataset?.memberClash;
       if (clashMemberID) {
         const name = decodeURIComponent(event.target.dataset.memberName || clashMemberID);
-        const token = getSessionToken() || els.legacyToken.value.trim();
         const url = `/api/admin/members/${clashMemberID}/clash.yaml`;
-        const a = document.createElement('a');
-        a.href = url;
-        // Pass auth via a temp fetch + object URL so the header is sent.
+        const headers = new Headers();
+        const sessionToken = getSessionToken();
+        if (sessionToken) {
+          headers.set('Authorization', `Bearer ${sessionToken}`);
+        } else if (els.legacyToken.value.trim()) {
+          headers.set('X-Admin-Token', els.legacyToken.value.trim());
+        }
         try {
-          const resp = await api(url);
-          const blob = new Blob([await resp.text()], { type: 'application/yaml' });
+          const resp = await fetch(url, { headers });
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ error: resp.statusText }));
+            throw new Error(err.error || resp.statusText);
+          }
+          const text = await resp.text();
+          const blob = new Blob([text], { type: 'application/yaml' });
+          const a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
           a.download = `clash-${name}.yaml`;
           a.click();
