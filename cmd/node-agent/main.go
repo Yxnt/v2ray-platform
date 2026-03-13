@@ -140,6 +140,7 @@ func main() {
 		}
 		if shouldCollectUsage(cfg, lastUsageAttemptAt) {
 			lastUsageAttemptAt = time.Now().UTC()
+			log.Printf("[usage] collecting (source=%s cmd=%q)", cfg.UsageSource, cfg.UsageQueryCommand)
 			if changedState, err := maybeUploadUsage(cfg, client, state); err != nil {
 				log.Printf("usage upload failed: %v", err)
 			} else if !agentStatesEqual(changedState, state) {
@@ -274,20 +275,28 @@ func maybeUploadUsageFromRuntime(cfg config.NodeAgentConfig, client *http.Client
 	defer cancel()
 	output, err := queryRuntimeUsage(ctx, cfg)
 	if err != nil {
+		log.Printf("[usage] query command failed: %v", err)
 		return state, err
 	}
+	log.Printf("[usage] raw output (%d bytes): %s", len(output), strings.TrimSpace(string(output)))
 	currentTotals, err := parseUsageCounters(output)
 	if err != nil {
+		log.Printf("[usage] parse failed: %v", err)
 		return state, err
 	}
+	log.Printf("[usage] parsed %d user counter(s)", len(currentTotals))
 	snapshots, nextTotals := diffUsageCounters(currentTotals, state.UsageTotals, time.Now().UTC())
 	state.UsageTotals = nextTotals
 	if len(snapshots) == 0 {
+		log.Printf("[usage] no delta since last collection, skipping upload")
 		return state, nil
 	}
+	log.Printf("[usage] uploading %d snapshot(s) to control plane", len(snapshots))
 	if err := postJSON(client, cfg.ControlPlaneURL+"/api/agent/usage", state.NodeToken, usageRequest{Snapshots: snapshots}, nil); err != nil {
+		log.Printf("[usage] upload failed: %v", err)
 		return state, err
 	}
+	log.Printf("[usage] upload OK")
 	return state, nil
 }
 
