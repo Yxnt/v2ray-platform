@@ -2,9 +2,14 @@ package api
 
 import (
 "bytes"
+"crypto/md5"
+"errors"
+"fmt"
+"io"
 "net/http"
 "strings"
 "text/template"
+"time"
 )
 
 var installScriptTmpl = template.Must(template.New("install").Parse(`#!/usr/bin/env bash
@@ -243,4 +248,46 @@ if r.URL.Query().Get("arch") == "arm64" {
 target = strings.ReplaceAll(target, "amd64", "arm64")
 }
 http.Redirect(w, r, target, http.StatusFound)
+}
+
+func (svc *ControlPlaneService) handleNodeAgentMD5(w http.ResponseWriter, r *http.Request) {
+	arch := r.URL.Query().Get("arch")
+	if arch == "" {
+		arch = "amd64"
+	}
+	md5hex := svc.agentCache.get(arch)
+	if md5hex == "" {
+		// Try to fetch synchronously once.
+		svc.refreshAgentMD5(arch)
+		md5hex = svc.agentCache.get(arch)
+	}
+	if md5hex == "" {
+		writeError(w, http.StatusServiceUnavailable, errors.New("agent MD5 not available"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(md5hex + "\n"))
+}
+
+// refreshAgentMD5 downloads the agent binary and computes its MD5, storing it in the cache.
+func (svc *ControlPlaneService) refreshAgentMD5(arch string) {
+	downloadURL := svc.agentDownloadURL
+	if arch == "arm64" {
+		downloadURL = strings.ReplaceAll(downloadURL, "amd64", "arm64")
+	}
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(downloadURL)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	h := md5.New()
+	if _, err := io.Copy(h, resp.Body); err != nil {
+		return
+	}
+	svc.agentCache.set(arch, fmt.Sprintf("%x", h.Sum(nil)))
 }

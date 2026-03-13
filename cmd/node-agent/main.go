@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -13,9 +14,11 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"v2ray-platform/internal/config"
@@ -53,6 +56,13 @@ type heartbeatRequest struct {
 	AppliedConfigVersion int64  `json:"applied_config_version"`
 	PublicHost           string `json:"public_host"`
 	Status               string `json:"status"`
+	Arch                 string `json:"arch,omitempty"`
+}
+
+type heartbeatResponse struct {
+	Status           string `json:"status"`
+	AgentMD5         string `json:"agent_md5,omitempty"`
+	AgentDownloadURL string `json:"agent_download_url,omitempty"`
 }
 
 type syncRequest struct {
@@ -114,8 +124,14 @@ func main() {
 	defer ticker.Stop()
 
 	for {
-		if err := heartbeat(cfg, client, state, appliedVersion); err != nil {
+		if hbResp, err := heartbeat(cfg, client, state, appliedVersion); err != nil {
 			log.Printf("heartbeat failed: %v", err)
+		} else if hbResp.AgentMD5 != "" && hbResp.AgentDownloadURL != "" {
+			// Check if we need to self-update.
+			if err := maybeSelfUpdate(hbResp.AgentMD5, hbResp.AgentDownloadURL); err != nil {
+				log.Printf("self-update check failed: %v", err)
+			}
+			// maybeSelfUpdate calls os.Exit on success, so we only reach here if no update needed.
 		}
 		if version, err := syncConfig(ctx, cfg, client, state, appliedVersion); err != nil {
 			log.Printf("config sync failed: %v", err)
@@ -157,13 +173,18 @@ func register(cfg config.NodeAgentConfig, client *http.Client) (agentState, erro
 	return agentState{NodeID: out.NodeID, NodeToken: out.NodeToken}, nil
 }
 
-func heartbeat(cfg config.NodeAgentConfig, client *http.Client, state agentState, appliedVersion int64) error {
+func heartbeat(cfg config.NodeAgentConfig, client *http.Client, state agentState, appliedVersion int64) (heartbeatResponse, error) {
 	reqBody := heartbeatRequest{
 		AppliedConfigVersion: appliedVersion,
 		PublicHost:           cfg.NodePublicHost,
 		Status:               "online",
+		Arch:                 runtime.GOARCH,
 	}
-	return postJSON(client, cfg.ControlPlaneURL+"/api/agent/heartbeat", state.NodeToken, reqBody, nil)
+	var resp heartbeatResponse
+	if err := postJSON(client, cfg.ControlPlaneURL+"/api/agent/heartbeat", state.NodeToken, reqBody, &resp); err != nil {
+		return heartbeatResponse{}, err
+	}
+	return resp, nil
 }
 
 func syncConfig(ctx context.Context, cfg config.NodeAgentConfig, client *http.Client, state agentState, currentVersion int64) (int64, error) {
@@ -451,6 +472,93 @@ func runReload(ctx context.Context, command string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// selfMD5 computes the MD5 hex digest of the running binary.
+func selfMD5() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	f, err := os.Open(exe)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// maybeSelfUpdate checks if the remote binary MD5 differs from the current
+// binary. If so, downloads the new binary, replaces self, and re-execs.
+func maybeSelfUpdate(remoteMD5, downloadURL string) error {
+	current, err := selfMD5()
+	if err != nil {
+		return fmt.Errorf("compute self MD5: %w", err)
+	}
+	if strings.EqualFold(current, remoteMD5) {
+		return nil // already up to date
+	}
+	log.Printf("self-update: current MD5=%s remote MD5=%s — downloading update", current, remoteMD5)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("download agent: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download agent: HTTP %d", resp.StatusCode)
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable path: %w", err)
+	}
+
+	// Write to a temp file alongside the current binary.
+	tmp, err := os.CreateTemp(strings.TrimSuffix(exe, "/"+strings.Split(exe, "/")[len(strings.Split(exe, "/"))-1]), ".node-agent-update-*")
+	if err != nil {
+		// fallback to system temp dir
+		tmp, err = os.CreateTemp("", ".node-agent-update-*")
+		if err != nil {
+			return fmt.Errorf("create temp file: %w", err)
+		}
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	h := md5.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, h), resp.Body); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	tmp.Close()
+
+	// Verify MD5 of downloaded file.
+	downloadedMD5 := fmt.Sprintf("%x", h.Sum(nil))
+	if !strings.EqualFold(downloadedMD5, remoteMD5) {
+		return fmt.Errorf("self-update MD5 mismatch: expected %s got %s", remoteMD5, downloadedMD5)
+	}
+
+	// Make executable and atomically replace.
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, exe); err != nil {
+		return fmt.Errorf("replace binary: %w", err)
+	}
+
+	log.Printf("self-update: replaced binary at %s — restarting", exe)
+	// Re-exec self to pick up the new binary.
+	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+		// syscall.Exec replaces the process; if we get here something went wrong.
+		return fmt.Errorf("re-exec: %w", err)
+	}
+	return nil // unreachable
 }
 
 func loadState(path string) (agentState, error) {

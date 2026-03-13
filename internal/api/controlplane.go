@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -25,6 +26,38 @@ var webAssets embed.FS
 
 type adminClaimsKey struct{}
 
+// agentBinaryCache holds the latest fetched MD5 checksums for agent binaries.
+type agentBinaryCache struct {
+	mu     sync.RWMutex
+	md5s   map[string]string // arch → md5hex
+	fetchedAt time.Time
+}
+
+func (c *agentBinaryCache) get(arch string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.md5s[arch]
+}
+
+func (c *agentBinaryCache) set(arch, md5hex string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.md5s == nil {
+		c.md5s = map[string]string{}
+	}
+	c.md5s[arch] = md5hex
+	c.fetchedAt = time.Now()
+}
+
+func (c *agentBinaryCache) age() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.fetchedAt.IsZero() {
+		return 999 * time.Hour
+	}
+	return time.Since(c.fetchedAt)
+}
+
 type ControlPlaneService struct {
 	store            store.Store
 	sessions         *auth.Manager
@@ -33,10 +66,11 @@ type ControlPlaneService struct {
 	serviceName      string
 	revisionName     string
 	agentDownloadURL string
+	agentCache       agentBinaryCache
 }
 
 func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts interface{ ListAlerts() []domain.Alert }, storeMode, serviceName, revisionName, agentDownloadURL string) *ControlPlaneService {
-	return &ControlPlaneService{
+	svc := &ControlPlaneService{
 		store:            st,
 		sessions:         sessions,
 		alerts:           alerts,
@@ -45,6 +79,12 @@ func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts inter
 		revisionName:     revisionName,
 		agentDownloadURL: agentDownloadURL,
 	}
+	// Pre-warm agent binary MD5 cache in background.
+	if agentDownloadURL != "" {
+		go svc.refreshAgentMD5("amd64")
+		go svc.refreshAgentMD5("arm64")
+	}
+	return svc
 }
 
 func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Handler {
@@ -101,6 +141,7 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Han
 	mux.HandleFunc("POST /api/agent/usage", svc.handleAgentUsage)
 	mux.HandleFunc("GET /install.sh", svc.handleInstallScript)
 	mux.HandleFunc("GET /node-agent", svc.handleNodeAgentBinary)
+	mux.HandleFunc("GET /node-agent.md5", svc.handleNodeAgentMD5)
 	return responseMetadataMiddleware(
 		svc.serviceName,
 		svc.revisionName,
@@ -221,6 +262,13 @@ type heartbeatRequest struct {
 	AppliedConfigVersion int64  `json:"applied_config_version"`
 	PublicHost           string `json:"public_host"`
 	Status               string `json:"status"`
+	Arch                 string `json:"arch,omitempty"` // e.g. "amd64" or "arm64"
+}
+
+type heartbeatResponse struct {
+	Status            string `json:"status"`
+	AgentMD5          string `json:"agent_md5,omitempty"`
+	AgentDownloadURL  string `json:"agent_download_url,omitempty"`
 }
 
 type syncResultRequest struct {
@@ -1109,7 +1157,26 @@ func (svc *ControlPlaneService) handleAgentHeartbeat(w http.ResponseWriter, r *h
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	resp := heartbeatResponse{Status: "ok"}
+	if svc.agentDownloadURL != "" {
+		arch := req.Arch
+		if arch == "" {
+			arch = "amd64"
+		}
+		// Refresh MD5 cache if stale (> 1 hour).
+		if svc.agentCache.age() > time.Hour {
+			go svc.refreshAgentMD5(arch)
+		}
+		if md5hex := svc.agentCache.get(arch); md5hex != "" {
+			downloadURL := svc.agentDownloadURL
+			if arch == "arm64" {
+				downloadURL = strings.ReplaceAll(downloadURL, "amd64", "arm64")
+			}
+			resp.AgentMD5 = md5hex
+			resp.AgentDownloadURL = downloadURL
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (svc *ControlPlaneService) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
