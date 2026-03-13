@@ -1,4 +1,4 @@
-name: Deploy to Cloud Run
+name: Build & push to Artifact Registry
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build-and-push:
@@ -16,24 +15,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set lowercase image name
-        id: image
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
         run: |
-          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "name=ghcr.io/${owner}/v2ray-platform-control-plane" >> "$GITHUB_OUTPUT"
+          gcloud auth configure-docker \
+            "${{ vars.GCP_REGION || 'asia-east1' }}-docker.pkg.dev" --quiet
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        run: |
+          REGION="${{ vars.GCP_REGION || 'asia-east1' }}"
+          PROJECT="${{ vars.GCP_PROJECT }}"
+          REPO="${{ vars.GAR_REPO || 'v2ray-platform' }}"
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/control-plane"
 
-      - name: Build and push control-plane image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ steps.image.outputs.name }}:latest
-            ${{ steps.image.outputs.name }}:${{ github.sha }}
+          docker build \
+            -t "${IMAGE}:latest" \
+            -t "${IMAGE}:${{ github.sha }}" \
+            .
+
+          docker push "${IMAGE}:latest"
+          docker push "${IMAGE}:${{ github.sha }}"
+
+          echo "Image pushed: ${IMAGE}:${{ github.sha }}"
