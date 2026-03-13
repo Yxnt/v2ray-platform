@@ -44,6 +44,7 @@ func main() {
 		storeMode,
 		cfg.ServiceName,
 		cfg.RevisionName,
+		cfg.AgentDownloadURL,
 	)
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,

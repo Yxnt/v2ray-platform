@@ -46,6 +46,7 @@ Environment variables:
 - `CONTROL_PLANE_DB_MAX_OPEN_CONNS`
 - `CONTROL_PLANE_DB_MAX_IDLE_CONNS`
 - `CONTROL_PLANE_DB_CONN_MAX_LIFETIME_SECONDS`
+- `AGENT_DOWNLOAD_URL` override the node-agent binary download URL (default: GitHub Releases latest)
 
 The app automatically:
 
@@ -113,19 +114,43 @@ After deploy:
 
 1. Open the Cloud Run URL.
 2. Log in with `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`.
-3. Create a bootstrap token.
-4. Use that token in your node bootstrap flow.
-5. Manage members, grants, revocations, and audit logs in the built-in UI.
-6. Review node/member usage summaries in the same UI after agents upload snapshots.
-7. Use node/member search filters and batch actions directly in the built-in UI.
+3. In the **Nodes** tab, click **＋ Add Node**, fill in the form, and copy the generated one-liner to bootstrap each node.
+4. Manage members, grants, revocations, and audit logs in the built-in UI.
+5. Review node/member usage summaries in the same UI after agents upload snapshots.
+6. Use node/member search filters and batch actions directly in the built-in UI.
 
 ## Node bootstrap
 
-The node side still runs on your own V2Ray servers. Use:
+### One-click bootstrap from the admin UI (recommended)
+
+1. Open the admin UI and go to the **Nodes** tab.
+2. Click **＋ Add Node** to expand the panel.
+3. Fill in the node name, region, public host, and any tags.
+4. Click **Generate install command**.
+5. Copy the displayed `curl | bash` one-liner and run it on your server as root:
 
 ```sh
-deploy/init/bootstrap.sh
+curl -fsSL "https://<your-cp>/install.sh?token=<TOKEN>&name=<NAME>&region=<REGION>" | bash
 ```
+
+The script will:
+- Download the `node-agent` binary from the GitHub Releases for this repository.
+- Write `/etc/default/v2ray-platform-node-agent` with all required environment variables.
+- Install and start the `v2ray-platform-node-agent` systemd service.
+
+The `node-agent` binaries for `linux/amd64` and `linux/arm64` are published automatically
+to GitHub Releases by the CI workflow on every push to `main` and on semver tags.
+
+To override the download source (e.g. for air-gapped environments), set
+`AGENT_DOWNLOAD_URL` on the control plane:
+
+```sh
+AGENT_DOWNLOAD_URL=https://your-mirror.example.com/node-agent-linux-amd64
+```
+
+### Manual bootstrap (alternative)
+
+You can still run the legacy bootstrap script directly:
 
 Important variables:
 

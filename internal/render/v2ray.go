@@ -8,12 +8,11 @@ import (
 
 type v2rayConfig struct {
 	Log       map[string]any `json:"log"`
-	API       map[string]any `json:"api"`
-	Stats     map[string]any `json:"stats"`
-	Policy    map[string]any `json:"policy"`
 	Inbounds  []any          `json:"inbounds"`
 	Outbounds []any          `json:"outbounds"`
 	Routing   map[string]any `json:"routing"`
+	DNS       map[string]any `json:"dns"`
+	Policy    map[string]any `json:"policy"`
 }
 
 type vmessClient struct {
@@ -32,73 +31,98 @@ func RenderNodeConfig(node domain.Node, creds []domain.NodeCredential) (string, 
 		})
 	}
 
+	wsPath := "/" + node.Name
+
 	cfg := v2rayConfig{
-		Log:   map[string]any{"loglevel": "warning"},
-		API:   map[string]any{"tag": "stats-api", "services": []string{"StatsService"}},
-		Stats: map[string]any{},
-		Policy: map[string]any{
-			"levels": map[string]any{
-				"0": map[string]any{
-					"statsUserUplink":   true,
-					"statsUserDownlink": true,
-				},
-			},
-			"system": map[string]any{
-				"statsInboundUplink":    true,
-				"statsInboundDownlink":  true,
-				"statsOutboundUplink":   true,
-				"statsOutboundDownlink": true,
-			},
-		},
+		Log: map[string]any{"loglevel": "info"},
 		Inbounds: []any{
 			map[string]any{
-				"port":     10000,
-				"listen":   "0.0.0.0",
+				"port":     23333,
+				"listen":   "127.0.0.1",
+				"tag":      "vmess-inbound",
 				"protocol": "vmess",
 				"settings": map[string]any{
-					"clients": clients,
+					"clients":    clients,
+					"decryption": "none",
+				},
+				"sniffing": map[string]any{
+					"enabled":      true,
+					"destOverride": []string{"http", "tls"},
 				},
 				"streamSettings": map[string]any{
-					"network": "ws",
+					"network":  "ws",
+					"security": "none",
 					"wsSettings": map[string]any{
-						"path": "/ray",
+						"path": wsPath,
 					},
 				},
-				"tag": "main",
-			},
-			map[string]any{
-				"listen":   "127.0.0.1",
-				"port":     10085,
-				"protocol": "dokodemo-door",
-				"settings": map[string]any{
-					"address": "127.0.0.1",
-				},
-				"tag": "stats-api-in",
 			},
 		},
 		Outbounds: []any{
-			map[string]any{"protocol": "freedom", "tag": "internet"},
-			map[string]any{"protocol": "blackhole", "tag": "blocked"},
+			map[string]any{
+				"protocol": "freedom",
+				"settings": map[string]any{"userLevel": 0},
+				"tag":      "direct",
+			},
+			map[string]any{
+				"protocol": "blackhole",
+				"settings": map[string]any{},
+				"tag":      "blocked",
+			},
 		},
 		Routing: map[string]any{
-			"domainStrategy": "IPIfNonMatch",
+			"domainStrategy": "AsIS",
+			"domainMatcher":  "mph",
 			"rules": []any{
 				map[string]any{
 					"type":        "field",
-					"inboundTag":  []string{"stats-api-in"},
-					"outboundTag": "stats-api",
+					"outboundTag": "blocked",
+					"protocol":    []string{"bittorrent"},
 				},
 				map[string]any{
 					"type":        "field",
 					"ip":          []string{"geoip:private"},
 					"outboundTag": "blocked",
 				},
+				map[string]any{
+					"type":        "field",
+					"domain":      []string{"geosite:category-ads"},
+					"outboundTag": "blocked",
+				},
 			},
 		},
-	}
-
-	if node.RuntimeFlavor == "xray" {
-		cfg.Log["loglevel"] = "info"
+		DNS: map[string]any{
+			"hosts": map[string]any{
+				"domain:v2fly.org":        "www.vicemc.net",
+				"domain:github.io":        "pages.github.com",
+				"domain:wikipedia.org":    "www.wikimedia.org",
+				"domain:shadowsocks.org":  "electronicsrealm.com",
+			},
+			"servers": []any{
+				"1.1.1.1",
+				map[string]any{
+					"address": "1.2.4.8",
+					"port":    53,
+					"domains": []string{"geosite:cn"},
+				},
+				"8.8.8.8",
+				"localhost",
+			},
+		},
+		Policy: map[string]any{
+			"levels": map[string]any{
+				"0": map[string]any{
+					"uplinkOnly":   0,
+					"downlinkOnly": 0,
+				},
+			},
+			"system": map[string]any{
+				"statsInboundUplink":    false,
+				"statsInboundDownlink":  false,
+				"statsOutboundUplink":   false,
+				"statsOutboundDownlink": false,
+			},
+		},
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")

@@ -321,6 +321,51 @@
       </div>
     </div>
 
+    <!-- Add Node (one-click install) -->
+    <div class="create-panel">
+      <button class="cp-toggle" data-panel="add-node">
+        ＋ Add Node
+        <span class="cp-arrow">＋</span>
+      </button>
+      <div class="cp-body" id="panel-add-node">
+        <div class="form-row">
+          <div class="field grow">
+            <label for="new-node-name">Node Name *</label>
+            <input id="new-node-name" placeholder="hk-node-01">
+          </div>
+          <div class="field">
+            <label for="new-node-region">Region</label>
+            <input id="new-node-region" placeholder="hk">
+          </div>
+          <div class="field grow">
+            <label for="new-node-host">Public Host</label>
+            <input id="new-node-host" placeholder="1.2.3.4 or node.example.com">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="field grow">
+            <label for="new-node-tags">Tags (comma-separated)</label>
+            <input id="new-node-tags" placeholder="prod,ap">
+          </div>
+          <div class="field" style="min-width:120px">
+            <label for="new-node-token-ttl">Token TTL (hours)</label>
+            <input id="new-node-token-ttl" type="number" value="24">
+          </div>
+          <div class="field" style="align-self:flex-end">
+            <button id="gen-install-cmd-btn" class="btn btn-primary">Generate install command</button>
+          </div>
+        </div>
+        <div id="install-cmd-output" style="display:none">
+          <p style="margin:8px 0 4px;font-size:13px;color:var(--text-muted)">Run this on your server as root:</p>
+          <div style="position:relative">
+            <pre class="output-pre" id="install-cmd-pre"></pre>
+            <button class="btn btn-ghost" id="copy-install-cmd" style="position:absolute;top:8px;right:8px;font-size:11px">Copy</button>
+          </div>
+        </div>
+        <p id="add-node-error" style="display:none;color:var(--danger);font-size:13px;margin:6px 0 0"></p>
+      </div>
+    </div>
+
     <div class="toolbar">
       <input id="node-search" placeholder="Search name / host / provider / tag…">
       <select id="node-status-filter">
@@ -970,6 +1015,45 @@
         await refreshDashboard();
       } catch (error) {
         writeJSON('#bootstrap-output', { error: error.message });
+      }
+    });
+
+    document.querySelector('#gen-install-cmd-btn').addEventListener('click', async () => {
+      const errEl = document.querySelector('#add-node-error');
+      errEl.style.display = 'none';
+      const name = document.querySelector('#new-node-name').value.trim();
+      if (!name) {
+        errEl.textContent = 'Node Name is required.';
+        errEl.style.display = 'block';
+        return;
+      }
+      try {
+        const tokenResp = await api('/api/admin/bootstrap-tokens', {
+          method: 'POST',
+          body: JSON.stringify({
+            description: 'node:' + name,
+            ttl_hours: Number(document.querySelector('#new-node-token-ttl').value) || 24,
+          }),
+        });
+        const baseURL = window.location.origin;
+        const params = new URLSearchParams({
+          token: tokenResp.bootstrap_token,
+          name,
+          region: document.querySelector('#new-node-region').value.trim(),
+          host: document.querySelector('#new-node-host').value.trim(),
+          tags: document.querySelector('#new-node-tags').value.trim(),
+        });
+        for (const [k, v] of [...params]) { if (!v) params.delete(k); }
+        const cmd = `curl -fsSL "${baseURL}/install.sh?${params}" | bash`;
+        document.querySelector('#install-cmd-pre').textContent = cmd;
+        document.querySelector('#install-cmd-output').style.display = 'block';
+        document.querySelector('#copy-install-cmd').onclick = () => {
+          navigator.clipboard.writeText(cmd).catch(() => {});
+        };
+        await refreshDashboard();
+      } catch (error) {
+        errEl.textContent = error.message;
+        errEl.style.display = 'block';
       }
     });
 

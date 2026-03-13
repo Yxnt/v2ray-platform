@@ -26,22 +26,24 @@ var webAssets embed.FS
 type adminClaimsKey struct{}
 
 type ControlPlaneService struct {
-	store        store.Store
-	sessions     *auth.Manager
-	alerts       interface{ ListAlerts() []domain.Alert }
-	storeMode    string
-	serviceName  string
-	revisionName string
+	store            store.Store
+	sessions         *auth.Manager
+	alerts           interface{ ListAlerts() []domain.Alert }
+	storeMode        string
+	serviceName      string
+	revisionName     string
+	agentDownloadURL string
 }
 
-func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts interface{ ListAlerts() []domain.Alert }, storeMode, serviceName, revisionName string) *ControlPlaneService {
+func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts interface{ ListAlerts() []domain.Alert }, storeMode, serviceName, revisionName, agentDownloadURL string) *ControlPlaneService {
 	return &ControlPlaneService{
-		store:        st,
-		sessions:     sessions,
-		alerts:       alerts,
-		storeMode:    storeMode,
-		serviceName:  serviceName,
-		revisionName: revisionName,
+		store:            st,
+		sessions:         sessions,
+		alerts:           alerts,
+		storeMode:        storeMode,
+		serviceName:      serviceName,
+		revisionName:     revisionName,
+		agentDownloadURL: agentDownloadURL,
 	}
 }
 
@@ -89,6 +91,8 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Han
 	mux.HandleFunc("GET /api/agent/config", svc.handleAgentConfig)
 	mux.HandleFunc("POST /api/agent/sync-result", svc.handleAgentSyncResult)
 	mux.HandleFunc("POST /api/agent/usage", svc.handleAgentUsage)
+	mux.HandleFunc("GET /install.sh", svc.handleInstallScript)
+	mux.HandleFunc("GET /node-agent", svc.handleNodeAgentBinary)
 	return responseMetadataMiddleware(
 		svc.serviceName,
 		svc.revisionName,
