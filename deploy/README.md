@@ -67,46 +67,68 @@ docker build -t v2ray-platform-control-plane .
 
 ## Deploy to Cloud Run
 
-### 1. Create a Neon database
+There are two ways to deploy: **automatic via GitHub Actions** or **manual via script**.
 
-Create a Neon project and copy the connection string, for example:
+### Option A — GitHub Actions (recommended)
 
+Push to `main` and the workflow in `.github/workflows/deploy.yml` will:
+1. Build and push the Docker image to **GitHub Container Registry** (`ghcr.io`).
+2. Deploy the new image to Cloud Run.
+
+**One-time GitHub setup** (Settings → Secrets and variables):
+
+| Secret | Value |
+|--------|-------|
+| `GCP_SA_KEY` | JSON key of a GCP service account (see below) |
+| `DATABASE_URL` | Neon or Cloud SQL connection string |
+| `BOOTSTRAP_ADMIN_EMAIL` | First admin email |
+| `BOOTSTRAP_ADMIN_PASSWORD` | First admin password (rotate after first login) |
+| `CONTROL_PLANE_SESSION_SECRET` | Random 32+ char string (`openssl rand -hex 32`) |
+| `CONTROL_PLANE_ALERT_WEBHOOK_URL` | _(optional)_ webhook for alerts |
+
+**Repository variables** (Settings → Variables — not secrets):
+
+| Variable | Default | Override example |
+|----------|---------|-----------------|
+| `GCP_REGION` | `asia-east1` | `us-central1` |
+| `CLOUDRUN_SERVICE` | `v2ray-platform` | `my-cp` |
+
+**GCP service account minimum roles:**
 ```sh
-postgres://user:password@ep-xxxxxx.us-east-1.aws.neon.tech/neondb?sslmode=require
+gcloud projects add-iam-policy-binding YOUR_PROJECT \
+  --member="serviceAccount:YOUR_SA@YOUR_PROJECT.iam.gserviceaccount.com" \
+  --role="roles/run.admin"
+gcloud projects add-iam-policy-binding YOUR_PROJECT \
+  --member="serviceAccount:YOUR_SA@YOUR_PROJECT.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser"
 ```
 
-### 2. Build and push the image
+Cloud Run needs permission to pull from `ghcr.io`. Either make the package public
+(recommended for this project) in your GitHub Package settings, or configure
+[authenticated pulls](https://cloud.google.com/run/docs/deploying#other-registries).
 
-Example with Artifact Registry:
-
-```sh
-gcloud auth login
-gcloud config set project YOUR_GCP_PROJECT
-gcloud auth configure-docker
-
-docker build -t gcr.io/YOUR_GCP_PROJECT/v2ray-platform-control-plane:latest .
-docker push gcr.io/YOUR_GCP_PROJECT/v2ray-platform-control-plane:latest
-```
-
-### 3. Deploy to Cloud Run
+### Option B — one-shot local script
 
 ```sh
-gcloud run deploy v2ray-platform-control-plane \
-  --image gcr.io/YOUR_GCP_PROJECT/v2ray-platform-control-plane:latest \
-  --platform managed \
-  --region asia-east1 \
-  --allow-unauthenticated \
-  --set-env-vars DATABASE_URL="$DATABASE_URL",BOOTSTRAP_ADMIN_EMAIL=admin@example.com,BOOTSTRAP_ADMIN_PASSWORD=change-me-now,CONTROL_PLANE_SESSION_SECRET=change-me-too
+export GCP_PROJECT=your-project-id
+export DATABASE_URL='postgres://user:pass@host/db?sslmode=require'
+export BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+export BOOTSTRAP_ADMIN_PASSWORD=changeme
+export CONTROL_PLANE_SESSION_SECRET=$(openssl rand -hex 32)
+
+# optional overrides
+export GCP_REGION=asia-east1
+export CLOUDRUN_SERVICE=v2ray-platform
+
+bash deploy/deploy-cloudrun.sh
 ```
 
-Notes:
+The script will:
+1. Create an Artifact Registry repository if needed.
+2. Build the Docker image and push it tagged with the current git SHA + `latest`.
+3. Deploy to Cloud Run with all required env vars.
+4. Print the service URL when done.
 
-- Set a strong `CONTROL_PLANE_SESSION_SECRET`.
-- Use `BOOTSTRAP_ADMIN_PASSWORD` only for initial bootstrap; after the first admin is created, rotate or remove it from the deployed environment.
-- Only set `CONTROL_PLANE_ADMIN_TOKEN` if you intentionally need the legacy header fallback; leave it unset for normal production deployments.
-- Tune the SQL pool env vars conservatively if your PostgreSQL provider has strict connection caps.
-- Cloud Run injects `PORT`, so no manual listen flag is needed.
-- `--allow-unauthenticated` is acceptable for the current build because admin APIs are still token-protected, but in production you may still want Cloud Run IAM or a reverse proxy in front.
 
 ## First login and usage
 
