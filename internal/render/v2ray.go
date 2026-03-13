@@ -138,8 +138,10 @@ func RenderNodeConfig(node domain.Node, creds []domain.NodeCredential) (string, 
 		Policy: map[string]any{
 			"levels": map[string]any{
 				"0": map[string]any{
-					"uplinkOnly":   0,
-					"downlinkOnly": 0,
+					"uplinkOnly":         0,
+					"downlinkOnly":       0,
+					"statsUserUplink":    true,
+					"statsUserDownlink":  true,
 				},
 			},
 			"system": map[string]any{
@@ -147,6 +149,8 @@ func RenderNodeConfig(node domain.Node, creds []domain.NodeCredential) (string, 
 				"statsInboundDownlink":  true,
 				"statsOutboundUplink":   true,
 				"statsOutboundDownlink": true,
+				"statsUserUplink":       true,
+				"statsUserDownlink":     true,
 			},
 		},
 	}
