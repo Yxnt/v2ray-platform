@@ -9,6 +9,8 @@ import (
 // UpdateMemberInput carries the fields that can be patched on an existing member.
 // Nil pointer fields are left unchanged.
 type UpdateMemberInput struct {
+	Email           *string
+	UUID            *string
 	Status          *domain.MemberStatus
 	ExpiresAt       *time.Time // set to non-nil to write; use ClearExpiry to remove
 	ClearExpiry     bool

@@ -156,6 +156,8 @@ type createNodeGroupRequest struct {
 // updateMemberRequest is used by PATCH /api/admin/members/{id}.
 // All fields are optional; omitted fields leave the member unchanged.
 type updateMemberRequest struct {
+	Email           *string `json:"email,omitempty"`
+	UUID            *string `json:"uuid,omitempty"`
 	Status          *string `json:"status,omitempty"`     // active | suspended | expired
 	ExpiresAt       *string `json:"expires_at,omitempty"` // RFC3339 timestamp or empty string to clear
 	QuotaBytesLimit *int64  `json:"quota_bytes_limit,omitempty"`
@@ -381,6 +383,8 @@ func (svc *ControlPlaneService) handleUpdateMember(w http.ResponseWriter, r *htt
 		return
 	}
 	input := store.UpdateMemberInput{
+		Email:           req.Email,
+		UUID:            req.UUID,
 		QuotaBytesLimit: req.QuotaBytesLimit,
 		DisabledReason:  req.DisabledReason,
 	}

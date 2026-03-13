@@ -466,6 +466,12 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 		return nil, err
 	}
 	now := time.Now().UTC()
+	if input.Email != nil {
+		member.Email = strings.ToLower(strings.TrimSpace(*input.Email))
+	}
+	if input.UUID != nil {
+		member.UUID = *input.UUID
+	}
 	if input.Status != nil {
 		member.Status = *input.Status
 	}
@@ -484,12 +490,22 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 	member.UpdatedAt = now
 	_, err = tx.Exec(
 		`UPDATE members
-		 SET status = $2, expires_at = $3, quota_bytes_limit = $4, disabled_reason = $5, updated_at = $6
+		 SET email = $2, uuid = $3, status = $4, expires_at = $5, quota_bytes_limit = $6, disabled_reason = $7, updated_at = $8
 		 WHERE id = $1`,
-		member.ID, member.Status, member.ExpiresAt, member.QuotaBytesLimit, member.DisabledReason, member.UpdatedAt,
+		member.ID, member.Email, member.UUID, member.Status, member.ExpiresAt,
+		member.QuotaBytesLimit, member.DisabledReason, member.UpdatedAt,
 	)
 	if err != nil {
 		return nil, mapPQError(err)
+	}
+	// If UUID changed, sync all existing node_credentials for this member.
+	if input.UUID != nil {
+		if _, err = tx.Exec(
+			`UPDATE node_credentials SET credential_uuid = $1 WHERE member_id = $2`,
+			member.UUID, member.ID,
+		); err != nil {
+			return nil, mapPQError(err)
+		}
 	}
 	// Rebuild config for all nodes this member has grants on.
 	affectedRows, err := tx.Query(`SELECT DISTINCT node_id FROM member_access_grants WHERE member_id = $1`, memberID)

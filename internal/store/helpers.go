@@ -12,10 +12,8 @@ import (
 	"v2ray-platform/internal/domain"
 )
 
-func credentialEmail(member *domain.Member, nodeID string) string {
-	local := strings.ToLower(member.Email)
-	local = strings.ReplaceAll(local, "@", "+")
-	return fmt.Sprintf("%s+%s@internal.invalid", local, nodeID)
+func credentialEmail(member *domain.Member, _ string) string {
+	return member.Email
 }
 
 func randomToken(byteLen int) (string, error) {

@@ -407,6 +407,18 @@ func (s *MemoryStore) UpdateMember(memberID string, input UpdateMemberInput) (*d
 		return nil, ErrNotFound
 	}
 	now := time.Now().UTC()
+	if input.Email != nil {
+		member.Email = strings.ToLower(strings.TrimSpace(*input.Email))
+	}
+	if input.UUID != nil {
+		member.UUID = *input.UUID
+		// Sync all node_credentials for this member.
+		for _, cred := range s.credentials {
+			if cred.MemberID == memberID {
+				cred.UUID = member.UUID
+			}
+		}
+	}
 	if input.Status != nil {
 		member.Status = *input.Status
 	}
