@@ -22,7 +22,7 @@ type PostgresStore struct {
 }
 
 func NewPostgresStore(databaseURL string, maxOpenConns, maxIdleConns int, connMaxLifetime time.Duration) (*PostgresStore, error) {
-	db, err := sql.Open("postgres", databaseURL)
+	db, err := sql.Open("postgres-simple", databaseURL)
 	if err != nil {
 		return nil, err
 	}
