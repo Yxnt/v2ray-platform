@@ -407,8 +407,14 @@ func (s *MemoryStore) UpdateMember(memberID string, input UpdateMemberInput) (*d
 		return nil, ErrNotFound
 	}
 	now := time.Now().UTC()
+	if input.Name != nil {
+		member.Name = strings.TrimSpace(*input.Name)
+	}
 	if input.Email != nil {
 		member.Email = strings.ToLower(strings.TrimSpace(*input.Email))
+	}
+	if input.Note != nil {
+		member.Note = *input.Note
 	}
 	if input.UUID != nil {
 		member.UUID = *input.UUID

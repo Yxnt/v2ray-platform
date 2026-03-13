@@ -466,8 +466,14 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 		return nil, err
 	}
 	now := time.Now().UTC()
+	if input.Name != nil {
+		member.Name = strings.TrimSpace(*input.Name)
+	}
 	if input.Email != nil {
 		member.Email = strings.ToLower(strings.TrimSpace(*input.Email))
+	}
+	if input.Note != nil {
+		member.Note = *input.Note
 	}
 	if input.UUID != nil {
 		member.UUID = *input.UUID
@@ -490,10 +496,10 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 	member.UpdatedAt = now
 	_, err = tx.Exec(
 		`UPDATE members
-		 SET email = $2, uuid = $3, status = $4, expires_at = $5, quota_bytes_limit = $6, disabled_reason = $7, updated_at = $8
+		 SET name = $2, email = $3, note = $4, uuid = $5, status = $6, expires_at = $7, quota_bytes_limit = $8, disabled_reason = $9, updated_at = $10
 		 WHERE id = $1`,
-		member.ID, member.Email, member.UUID, member.Status, member.ExpiresAt,
-		member.QuotaBytesLimit, member.DisabledReason, member.UpdatedAt,
+		member.ID, member.Name, member.Email, member.Note, member.UUID,
+		member.Status, member.ExpiresAt, member.QuotaBytesLimit, member.DisabledReason, member.UpdatedAt,
 	)
 	if err != nil {
 		return nil, mapPQError(err)

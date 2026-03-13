@@ -235,11 +235,51 @@
       .tab-btn { padding: 0 12px; font-size: 12px; }
       .app-header-center { display: none; }
     }
+
+    /* ── Edit member modal ── */
+    .edit-modal-overlay {
+      position: fixed; inset: 0; z-index: 300;
+      background: rgba(0,0,0,0.55);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .edit-modal-overlay.hidden { display: none; }
+    .edit-modal-card {
+      width: 100%; max-width: 480px; padding: 32px 28px;
+      background: var(--surface); border: 1px solid var(--border-2);
+      border-radius: 14px; box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+    }
+    .edit-modal-card h2 { font-size: 16px; font-weight: 700; margin: 0 0 20px; }
+    .edit-modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
   </style>
 </head>
 <body>
 
-<!-- ── Login overlay ── -->
+<!-- ── Edit Member Modal ── -->
+<div class="edit-modal-overlay hidden" id="edit-member-modal">
+  <div class="edit-modal-card">
+    <h2>Edit Member</h2>
+    <div class="field">
+      <label>Name</label>
+      <input id="edit-member-name" placeholder="Alice">
+    </div>
+    <div class="field">
+      <label>Email</label>
+      <input id="edit-member-email" type="email" placeholder="alice@example.com">
+    </div>
+    <div class="field">
+      <label>Note</label>
+      <input id="edit-member-note" placeholder="Team A">
+    </div>
+    <div class="field">
+      <label>UUID <span style="color:var(--text-muted);font-size:12px">(VMess client ID, shared across all nodes)</span></label>
+      <input id="edit-member-uuid" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="font-family:monospace">
+    </div>
+    <div class="edit-modal-actions">
+      <button class="btn btn-secondary" id="edit-member-cancel">Cancel</button>
+      <button class="btn btn-primary" id="edit-member-save">Save</button>
+    </div>
+  </div>
+</div>
 <div class="login-overlay" id="login-overlay">
   <div class="login-card">
     <div class="login-logo">⬡</div>
@@ -874,7 +914,7 @@
         const toggleLabel = isSuspended ? 'Activate' : 'Suspend';
         const toggleStatus = isSuspended ? 'active' : 'suspended';
         const row = document.createElement('tr');
-        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}">Edit</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
         els.membersBody.appendChild(row);
       }
 
@@ -1263,6 +1303,18 @@
         return;
       }
 
+      const editMemberID = event.target?.dataset?.memberEdit;
+      if (editMemberID) {
+        const btn = event.target;
+        document.querySelector('#edit-member-name').value  = decodeURIComponent(btn.dataset.memberName || '');
+        document.querySelector('#edit-member-email').value = decodeURIComponent(btn.dataset.memberEmail || '');
+        document.querySelector('#edit-member-note').value  = decodeURIComponent(btn.dataset.memberNote || '');
+        document.querySelector('#edit-member-uuid').value  = btn.dataset.memberUuid || '';
+        document.querySelector('#edit-member-modal').dataset.editingId = editMemberID;
+        document.querySelector('#edit-member-modal').classList.remove('hidden');
+        return;
+      }
+
       const grantID = event.target?.dataset?.grantDelete;
       if (grantID) {
         if (!confirm('Revoke this grant?')) return;
@@ -1334,6 +1386,33 @@
         const open = body.classList.toggle('open');
         toggle.classList.toggle('open', open);
       });
+    });
+
+    // ── Edit Member Modal ──
+    document.querySelector('#edit-member-cancel').addEventListener('click', () => {
+      document.querySelector('#edit-member-modal').classList.add('hidden');
+    });
+    document.querySelector('#edit-member-modal').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
+    });
+    document.querySelector('#edit-member-save').addEventListener('click', async () => {
+      const modal = document.querySelector('#edit-member-modal');
+      const memberID = modal.dataset.editingId;
+      if (!memberID) return;
+      const patch = {
+        name:  document.querySelector('#edit-member-name').value.trim() || undefined,
+        email: document.querySelector('#edit-member-email').value.trim() || undefined,
+        note:  document.querySelector('#edit-member-note').value.trim(),
+        uuid:  document.querySelector('#edit-member-uuid').value.trim() || undefined,
+      };
+      // Remove undefined keys
+      Object.keys(patch).forEach(k => patch[k] === undefined && delete patch[k]);
+      try {
+        await updateMember(memberID, patch);
+        modal.classList.add('hidden');
+      } catch (error) {
+        alert(error.message);
+      }
     });
 
     // ── Login overlay ──
