@@ -914,7 +914,7 @@
         const toggleLabel = isSuspended ? 'Activate' : 'Suspend';
         const toggleStatus = isSuspended ? 'active' : 'suspended';
         const row = document.createElement('tr');
-        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}">Edit</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}">Edit</button><button class="btn btn-secondary btn-xs" data-member-clash="${member.id}" data-member-name="${encodeURIComponent(member.name)}">Clash</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
         els.membersBody.appendChild(row);
       }
 
@@ -1312,6 +1312,27 @@
         document.querySelector('#edit-member-uuid').value  = btn.dataset.memberUuid || '';
         document.querySelector('#edit-member-modal').dataset.editingId = editMemberID;
         document.querySelector('#edit-member-modal').classList.remove('hidden');
+        return;
+      }
+
+      const clashMemberID = event.target?.dataset?.memberClash;
+      if (clashMemberID) {
+        const name = decodeURIComponent(event.target.dataset.memberName || clashMemberID);
+        const token = getSessionToken() || els.legacyToken.value.trim();
+        const url = `/api/admin/members/${clashMemberID}/clash.yaml`;
+        const a = document.createElement('a');
+        a.href = url;
+        // Pass auth via a temp fetch + object URL so the header is sent.
+        try {
+          const resp = await api(url);
+          const blob = new Blob([await resp.text()], { type: 'application/yaml' });
+          a.href = URL.createObjectURL(blob);
+          a.download = `clash-${name}.yaml`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        } catch (error) {
+          alert(error.message);
+        }
         return;
       }
 

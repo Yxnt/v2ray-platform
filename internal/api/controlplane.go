@@ -65,6 +65,7 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Han
 	mux.HandleFunc("POST /api/admin/members/batch-delete", withAdmin(cfg, svc.sessions, svc.handleBatchDeleteMembers))
 	mux.HandleFunc("PATCH /api/admin/members/{memberID}", withAdmin(cfg, svc.sessions, svc.handleUpdateMember))
 	mux.HandleFunc("DELETE /api/admin/members/{memberID}", withAdmin(cfg, svc.sessions, svc.handleDeleteMember))
+	mux.HandleFunc("GET /api/admin/members/{memberID}/clash.yaml", withAdmin(cfg, svc.sessions, svc.handleMemberClashConfig))
 	mux.HandleFunc("POST /api/admin/grants", withAdmin(cfg, svc.sessions, svc.handleCreateGrant))
 	mux.HandleFunc("GET /api/admin/grants", withAdmin(cfg, svc.sessions, svc.handleListGrants))
 	mux.HandleFunc("POST /api/admin/grants/batch-revoke", withAdmin(cfg, svc.sessions, svc.handleBatchRevokeGrants))
@@ -426,6 +427,129 @@ func (svc *ControlPlaneService) handleListMembers(w http.ResponseWriter, r *http
 		"items": items,
 		"count": len(items),
 	})
+}
+
+func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r *http.Request) {
+	memberID := r.PathValue("memberID")
+	if memberID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("missing member id"))
+		return
+	}
+
+	// Find the member.
+	var member *domain.Member
+	for _, m := range svc.store.ListMembers() {
+		if m.ID == memberID {
+			mc := m
+			member = &mc
+			break
+		}
+	}
+	if member == nil {
+		writeError(w, http.StatusNotFound, errors.New("member not found"))
+		return
+	}
+
+	// Collect all node IDs the member has access to.
+	nodeIDs := map[string]struct{}{}
+	for _, g := range svc.store.ListGrants() {
+		if g.MemberID == memberID {
+			nodeIDs[g.NodeID] = struct{}{}
+		}
+	}
+	groupIDs := map[string]struct{}{}
+	for _, gg := range svc.store.ListGroupGrantViews() {
+		if gg.MemberID == memberID {
+			groupIDs[gg.GroupID] = struct{}{}
+		}
+	}
+	for _, m := range svc.store.ListNodeGroupMemberships() {
+		if _, ok := groupIDs[m.GroupID]; ok {
+			nodeIDs[m.NodeID] = struct{}{}
+		}
+	}
+
+	// Build proxy list from accessible nodes.
+	type wsOpts struct {
+		Path string `yaml:"path"`
+	}
+	type proxy struct {
+		Name    string `yaml:"name"`
+		Type    string `yaml:"type"`
+		Server  string `yaml:"server"`
+		Port    int    `yaml:"port"`
+		UUID    string `yaml:"uuid"`
+		AlterId int    `yaml:"alterId"`
+		Cipher  string `yaml:"cipher"`
+		Network string `yaml:"network"`
+		WsOpts  wsOpts `yaml:"ws-opts"`
+	}
+
+	var proxies []proxy
+	var proxyNames []string
+	for _, node := range svc.store.ListNodes() {
+		if _, ok := nodeIDs[node.ID]; !ok {
+			continue
+		}
+		name := node.Name
+		if node.Region != "" {
+			name = node.Region + " - " + node.Name
+		}
+		proxies = append(proxies, proxy{
+			Name:    name,
+			Type:    "vmess",
+			Server:  node.PublicHost,
+			Port:    80,
+			UUID:    member.UUID,
+			AlterId: 0,
+			Cipher:  "auto",
+			Network: "ws",
+			WsOpts:  wsOpts{Path: "/" + node.Name},
+		})
+		proxyNames = append(proxyNames, name)
+	}
+
+	// Render YAML manually (avoid extra dependency).
+	var buf bytes.Buffer
+	buf.WriteString("mixed-port: 7890\n")
+	buf.WriteString("allow-lan: false\n")
+	buf.WriteString("mode: rule\n")
+	buf.WriteString("log-level: info\n")
+	buf.WriteString("external-controller: 127.0.0.1:9090\n\n")
+
+	buf.WriteString("proxies:\n")
+	for _, p := range proxies {
+		fmt.Fprintf(&buf, "  - name: %q\n", p.Name)
+		fmt.Fprintf(&buf, "    type: %s\n", p.Type)
+		fmt.Fprintf(&buf, "    server: %q\n", p.Server)
+		fmt.Fprintf(&buf, "    port: %d\n", p.Port)
+		fmt.Fprintf(&buf, "    uuid: %q\n", p.UUID)
+		fmt.Fprintf(&buf, "    alterId: %d\n", p.AlterId)
+		fmt.Fprintf(&buf, "    cipher: %s\n", p.Cipher)
+		fmt.Fprintf(&buf, "    network: %s\n", p.Network)
+		buf.WriteString("    ws-opts:\n")
+		fmt.Fprintf(&buf, "      path: %q\n", p.WsOpts.Path)
+		buf.WriteString("\n")
+	}
+
+	buf.WriteString("proxy-groups:\n")
+	buf.WriteString("  - name: Proxy\n")
+	buf.WriteString("    type: select\n")
+	buf.WriteString("    proxies:\n")
+	for _, name := range proxyNames {
+		fmt.Fprintf(&buf, "      - %q\n", name)
+	}
+	buf.WriteString("\n")
+
+	buf.WriteString("rules:\n")
+	buf.WriteString("  - GEOIP,CN,DIRECT\n")
+	buf.WriteString("  - MATCH,Proxy\n")
+
+	filename := fmt.Sprintf("clash-%s.yaml", strings.ReplaceAll(member.Name, " ", "-"))
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (svc *ControlPlaneService) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
