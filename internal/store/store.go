@@ -48,6 +48,7 @@ type Store interface {
 	Heartbeat(input HeartbeatInput) (*domain.Node, error)
 	RecordSyncResult(input SyncResultInput) error
 	GetNodeConfig(nodeToken string) (*domain.ConfigRevision, error)
+	GetNodeConfigByID(nodeID string) (*domain.ConfigRevision, error)
 	CreateMember(input CreateMemberInput) (*domain.Member, error)
 	UpdateMember(memberID string, input UpdateMemberInput) (*domain.Member, error)
 	GetMemberBySubscriptionToken(token string) (*domain.Member, error)

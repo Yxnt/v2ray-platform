@@ -304,6 +304,18 @@
     </div>
   </div>
 </div>
+
+<!-- ── Node Config Modal ── -->
+<div class="edit-modal-overlay hidden" id="node-config-modal">
+  <div class="edit-modal-card" style="max-width:700px;width:95vw">
+    <h2>Node Config <span id="node-config-title" style="font-weight:400;color:var(--text-muted);font-size:13px"></span></h2>
+    <div id="node-config-sync-status" style="margin-bottom:10px;font-size:13px"></div>
+    <pre id="node-config-json" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:11px;overflow:auto;max-height:55vh;margin:0;white-space:pre-wrap;word-break:break-all;color:var(--text)"></pre>
+    <div class="edit-modal-actions">
+      <button class="btn btn-secondary" id="node-config-close">Close</button>
+    </div>
+  </div>
+</div>
 <div class="login-overlay" id="login-overlay">
   <div class="login-card">
     <div class="login-logo">⬡</div>
@@ -965,7 +977,7 @@
       for (const node of nodes.items) {
         const statusBadge = `<span class="badge badge-${node.status || 'offline'}">${node.status || 'unknown'}</span>`;
         const row = document.createElement('tr');
-        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-node-select="${node.id}"></td><td><strong>${node.name}</strong></td><td>${statusBadge}</td><td>${node.region}</td><td style="color:var(--text-dim)">${node.public_host || '—'}</td><td style="color:var(--text-dim)">${(node.tags || []).join(', ') || '—'}</td><td style="color:var(--text-dim)">${(groupNamesByNode[node.id] || []).join(', ') || '—'}</td><td style="color:var(--text-muted)">${node.current_config_version}</td><td><button class="btn btn-secondary btn-xs" data-node-rebuild="${node.id}">↺ Rebuild</button></td>`;
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-node-select="${node.id}"></td><td><strong>${node.name}</strong></td><td>${statusBadge}</td><td>${node.region}</td><td style="color:var(--text-dim)">${node.public_host || '—'}</td><td style="color:var(--text-dim)">${(node.tags || []).join(', ') || '—'}</td><td style="color:var(--text-dim)">${(groupNamesByNode[node.id] || []).join(', ') || '—'}</td><td style="color:var(--text-muted)">${node.current_config_version}</td><td><button class="btn btn-secondary btn-xs" data-node-rebuild="${node.id}">↺ Rebuild</button> <button class="btn btn-secondary btn-xs" data-node-config="${node.id}" data-node-name="${encodeURIComponent(node.name)}">Config</button></td>`;
         els.nodesBody.appendChild(row);
       }
 
@@ -1485,6 +1497,41 @@
           btn.textContent = '↺ Rebuild';
         }
       }
+
+      const nodeConfigID = event.target?.dataset?.nodeConfig;
+      if (nodeConfigID) {
+        const nodeName = decodeURIComponent(event.target.dataset.nodeName || nodeConfigID);
+        const modal = document.getElementById('node-config-modal');
+        const pre = document.getElementById('node-config-json');
+        const syncEl = document.getElementById('node-config-sync-status');
+        document.getElementById('node-config-title').textContent = `— ${nodeName}`;
+        pre.textContent = 'Loading…';
+        syncEl.textContent = '';
+        modal.classList.remove('hidden');
+        try {
+          const data = await api(`/api/admin/nodes/${nodeConfigID}/config`);
+          // pretty-print the config JSON
+          let pretty = data.config_json;
+          try { pretty = JSON.stringify(JSON.parse(data.config_json), null, 2); } catch(_) {}
+          pre.textContent = pretty;
+          // show sync status
+          if (data.last_sync) {
+            const s = data.last_sync;
+            const ago = Math.round((Date.now() - new Date(s.occurred_at)) / 1000);
+            const agoStr = ago < 60 ? `${ago}s ago` : ago < 3600 ? `${Math.round(ago/60)}m ago` : `${Math.round(ago/3600)}h ago`;
+            const icon = s.success ? '✓' : '✗';
+            const color = s.success ? 'var(--success, #22863a)' : 'var(--danger, #cb2431)';
+            syncEl.innerHTML = `<span style="color:${color};font-weight:600">${icon} Node applied config v${s.config_version}</span> <span style="color:var(--text-muted)">${agoStr}</span>${s.message ? ` — ${s.message}` : ''}`;
+            if (s.config_version < data.config_version) {
+              syncEl.innerHTML += ` <span style="color:var(--warning,#d29922);font-weight:600"> ⚠ Pending update to v${data.config_version} (next heartbeat)</span>`;
+            }
+          } else {
+            syncEl.innerHTML = '<span style="color:var(--text-muted)">No sync events yet — node has not applied this config</span>';
+          }
+        } catch (error) {
+          pre.textContent = `Error: ${error.message}`;
+        }
+      }
     });
 
     document.addEventListener('change', (event) => {
@@ -1533,6 +1580,12 @@
       document.querySelector('#edit-member-modal').classList.add('hidden');
     });
     document.querySelector('#edit-member-modal').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
+    });
+    document.querySelector('#node-config-close').addEventListener('click', () => {
+      document.getElementById('node-config-modal').classList.add('hidden');
+    });
+    document.getElementById('node-config-modal').addEventListener('click', (e) => {
       if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
     });
     document.querySelector('#edit-member-save').addEventListener('click', async () => {

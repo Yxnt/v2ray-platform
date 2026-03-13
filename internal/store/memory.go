@@ -374,7 +374,17 @@ func (s *MemoryStore) GetNodeConfig(nodeToken string) (*domain.ConfigRevision, e
 	if err != nil {
 		return nil, err
 	}
-	revision, ok := s.revisions[node.ID]
+	return s.getNodeConfigByIDLocked(node.ID)
+}
+
+func (s *MemoryStore) GetNodeConfigByID(nodeID string) (*domain.ConfigRevision, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.getNodeConfigByIDLocked(nodeID)
+}
+
+func (s *MemoryStore) getNodeConfigByIDLocked(nodeID string) (*domain.ConfigRevision, error) {
+	revision, ok := s.revisions[nodeID]
 	if !ok {
 		return nil, ErrNotFound
 	}

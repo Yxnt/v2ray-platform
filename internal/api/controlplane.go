@@ -80,6 +80,7 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Han
 	mux.HandleFunc("POST /api/admin/node-groups/{groupID}/grants", withAdmin(cfg, svc.sessions, svc.handleCreateGroupGrant))
 	mux.HandleFunc("DELETE /api/admin/node-groups/{groupID}/grants/{memberID}", withAdmin(cfg, svc.sessions, svc.handleDeleteGroupGrant))
 	mux.HandleFunc("GET /api/admin/nodes", withAdmin(cfg, svc.sessions, svc.handleListNodes))
+	mux.HandleFunc("GET /api/admin/nodes/{nodeID}/config", withAdmin(cfg, svc.sessions, svc.handleGetNodeConfig))
 	mux.HandleFunc("POST /api/admin/nodes/{nodeID}/rebuild-config", withAdmin(cfg, svc.sessions, svc.handleRebuildNodeConfig))
 	mux.HandleFunc("POST /api/admin/nodes/batch-rebuild", withAdmin(cfg, svc.sessions, svc.handleBatchRebuildNodes))
 	mux.HandleFunc("GET /api/admin/usage/nodes", withAdmin(cfg, svc.sessions, svc.handleListNodeUsage))
@@ -855,6 +856,30 @@ func (svc *ControlPlaneService) handleRebuildNodeConfig(w http.ResponseWriter, r
 		"config_version": rev.ConfigVersion,
 	})
 	writeJSON(w, http.StatusOK, rev)
+}
+
+func (svc *ControlPlaneService) handleGetNodeConfig(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeID")
+	if nodeID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("missing node id"))
+		return
+	}
+	rev, err := svc.store.GetNodeConfigByID(nodeID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	// Also fetch last sync event to show applied status
+	events := svc.store.ListNodeSyncEvents(nodeID)
+	var lastSync *domain.NodeSyncEvent
+	if len(events) > 0 {
+		lastSync = &events[0]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"config_version": rev.ConfigVersion,
+		"config_json":    rev.Config,
+		"last_sync":      lastSync,
+	})
 }
 
 func (svc *ControlPlaneService) handleBatchRebuildNodes(w http.ResponseWriter, r *http.Request) {

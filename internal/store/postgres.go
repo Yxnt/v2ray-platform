@@ -411,14 +411,18 @@ func (s *PostgresStore) GetNodeConfig(nodeToken string) (*domain.ConfigRevision,
 	if err != nil {
 		return nil, err
 	}
+	return s.GetNodeConfigByID(node.ID)
+}
+
+func (s *PostgresStore) GetNodeConfigByID(nodeID string) (*domain.ConfigRevision, error) {
 	var rev domain.ConfigRevision
-	err = s.db.QueryRow(
+	err := s.db.QueryRow(
 		`SELECT node_id, config_version, config_json::text, created_at
 		 FROM node_config_revisions
 		 WHERE node_id = $1
 		 ORDER BY config_version DESC
 		 LIMIT 1`,
-		node.ID,
+		nodeID,
 	).Scan(&rev.NodeID, &rev.ConfigVersion, &rev.Config, &rev.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
