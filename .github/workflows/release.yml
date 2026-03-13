@@ -35,12 +35,15 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           go build -trimpath -ldflags="-s -w" -o ${{ matrix.artifact }} ./cmd/node-agent
+          md5sum ${{ matrix.artifact }} | awk '{print $1}' > ${{ matrix.artifact }}.md5
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.md5
 
   release:
     name: Publish release
@@ -92,4 +95,6 @@ jobs:
             --notes "${NOTES}" \
             ${PRERELEASE} \
             node-agent-linux-amd64 \
-            node-agent-linux-arm64
+            node-agent-linux-amd64.md5 \
+            node-agent-linux-arm64 \
+            node-agent-linux-arm64.md5

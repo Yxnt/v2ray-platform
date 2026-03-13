@@ -270,13 +270,42 @@ func (svc *ControlPlaneService) handleNodeAgentMD5(w http.ResponseWriter, r *htt
 	_, _ = w.Write([]byte(md5hex + "\n"))
 }
 
-// refreshAgentMD5 downloads the agent binary and computes its MD5, storing it in the cache.
+// refreshAgentMD5 fetches the .md5 sidecar file published alongside the binary in GitHub
+// Releases and stores the value in the cache. Using the sidecar avoids downloading the full
+// binary just to compute its hash, and ensures the cached value is always in sync with the
+// release (no stale-cache window between publish and the next hourly refresh).
 func (svc *ControlPlaneService) refreshAgentMD5(arch string) {
 	downloadURL := svc.agentDownloadURL
 	if arch == "arm64" {
 		downloadURL = strings.ReplaceAll(downloadURL, "amd64", "arm64")
 	}
-	client := &http.Client{Timeout: 60 * time.Second}
+	md5URL := downloadURL + ".md5"
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Get(md5URL)
+	if err != nil {
+		// Sidecar not available (old release or local override) — fall back to downloading
+		// the full binary and computing the MD5 ourselves.
+		svc.refreshAgentMD5ByDownload(arch, downloadURL)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		svc.refreshAgentMD5ByDownload(arch, downloadURL)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if err != nil {
+		return
+	}
+	md5hex := strings.TrimSpace(string(body))
+	if len(md5hex) == 32 {
+		svc.agentCache.set(arch, md5hex)
+	}
+}
+
+// refreshAgentMD5ByDownload is the fallback: download the full binary and hash it.
+func (svc *ControlPlaneService) refreshAgentMD5ByDownload(arch, downloadURL string) {
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Get(downloadURL)
 	if err != nil {
 		return
