@@ -45,6 +45,7 @@ func main() {
 		cfg.ServiceName,
 		cfg.RevisionName,
 		cfg.AgentDownloadURL,
+		cfg.AgentMD5CacheTTL,
 	)
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,

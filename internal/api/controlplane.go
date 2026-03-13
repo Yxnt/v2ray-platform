@@ -66,10 +66,14 @@ type ControlPlaneService struct {
 	serviceName      string
 	revisionName     string
 	agentDownloadURL string
+	agentMD5CacheTTL time.Duration
 	agentCache       agentBinaryCache
 }
 
-func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts interface{ ListAlerts() []domain.Alert }, storeMode, serviceName, revisionName, agentDownloadURL string) *ControlPlaneService {
+func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts interface{ ListAlerts() []domain.Alert }, storeMode, serviceName, revisionName, agentDownloadURL string, agentMD5CacheTTL time.Duration) *ControlPlaneService {
+	if agentMD5CacheTTL <= 0 {
+		agentMD5CacheTTL = 5 * time.Minute
+	}
 	svc := &ControlPlaneService{
 		store:            st,
 		sessions:         sessions,
@@ -78,6 +82,7 @@ func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts inter
 		serviceName:      serviceName,
 		revisionName:     revisionName,
 		agentDownloadURL: agentDownloadURL,
+		agentMD5CacheTTL: agentMD5CacheTTL,
 	}
 	// Pre-warm agent binary MD5 cache in background.
 	if agentDownloadURL != "" {
@@ -1163,8 +1168,8 @@ func (svc *ControlPlaneService) handleAgentHeartbeat(w http.ResponseWriter, r *h
 		if arch == "" {
 			arch = "amd64"
 		}
-		// Refresh MD5 cache if stale (> 5 minutes).
-		if svc.agentCache.age() > 5*time.Minute {
+		// Refresh MD5 cache if stale (configurable TTL, default 5 minutes).
+		if svc.agentCache.age() > svc.agentMD5CacheTTL {
 			go svc.refreshAgentMD5(arch)
 		}
 		if md5hex := svc.agentCache.get(arch); md5hex != "" {
