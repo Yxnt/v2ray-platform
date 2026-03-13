@@ -118,7 +118,7 @@ server {
     }
 }
 EOF
-rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+rm -f /etc/nginx/sites-enabled/default /etc/nginx/sites-available/default 2>/dev/null || true
 
 # ── agent env file ────────────────────────────────────────────────────────────
 echo "Writing agent env file..."
