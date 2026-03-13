@@ -66,13 +66,13 @@ func LoadControlPlane() ControlPlaneConfig {
 		SessionTTL:              time.Duration(mustAtoi(envOr("CONTROL_PLANE_SESSION_TTL_HOURS", "24"))) * time.Hour,
 		BootstrapAdminEmail:     os.Getenv("BOOTSTRAP_ADMIN_EMAIL"),
 		BootstrapAdminPassword:  os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
-		LifecycleSweepInterval:  time.Duration(mustAtoi(envOr("CONTROL_PLANE_LIFECYCLE_SWEEP_SECONDS", "60"))) * time.Second,
-		AlertEvaluationInterval: time.Duration(mustAtoi(envOr("CONTROL_PLANE_ALERT_EVALUATION_SECONDS", "60"))) * time.Second,
-		NodeOfflineAfter:        time.Duration(mustAtoi(envOr("CONTROL_PLANE_NODE_OFFLINE_SECONDS", "120"))) * time.Second,
+		LifecycleSweepInterval:  time.Duration(mustAtoi(envOr("CONTROL_PLANE_LIFECYCLE_SWEEP_SECONDS", "300"))) * time.Second,
+		AlertEvaluationInterval: time.Duration(mustAtoi(envOr("CONTROL_PLANE_ALERT_EVALUATION_SECONDS", "300"))) * time.Second,
+		NodeOfflineAfter:        time.Duration(mustAtoi(envOr("CONTROL_PLANE_NODE_OFFLINE_SECONDS", "900"))) * time.Second,
 		AlertWebhookURL:         os.Getenv("CONTROL_PLANE_ALERT_WEBHOOK_URL"),
-		DBMaxOpenConns:          mustAtoi(envOr("CONTROL_PLANE_DB_MAX_OPEN_CONNS", "10")),
-		DBMaxIdleConns:          mustAtoi(envOr("CONTROL_PLANE_DB_MAX_IDLE_CONNS", "5")),
-		DBConnMaxLifetime:       time.Duration(mustAtoi(envOr("CONTROL_PLANE_DB_CONN_MAX_LIFETIME_SECONDS", "300"))) * time.Second,
+		DBMaxOpenConns:          mustAtoi(envOr("CONTROL_PLANE_DB_MAX_OPEN_CONNS", "3")),
+		DBMaxIdleConns:          mustAtoi(envOr("CONTROL_PLANE_DB_MAX_IDLE_CONNS", "1")),
+		DBConnMaxLifetime:       time.Duration(mustAtoi(envOr("CONTROL_PLANE_DB_CONN_MAX_LIFETIME_SECONDS", "60"))) * time.Second,
 		ServiceName:             os.Getenv("K_SERVICE"),
 		RevisionName:            os.Getenv("K_REVISION"),
 		AgentDownloadURL:        envOr("AGENT_DOWNLOAD_URL", "https://github.com/Yxnt/v2ray-platform/releases/download/latest/node-agent-linux-amd64"),
@@ -80,8 +80,8 @@ func LoadControlPlane() ControlPlaneConfig {
 }
 
 func LoadNodeAgent() NodeAgentConfig {
-	intervalSeconds, _ := strconv.Atoi(envOr("NODE_HEARTBEAT_INTERVAL_SECONDS", "30"))
-	usageIntervalSeconds, _ := strconv.Atoi(envOr("NODE_USAGE_COLLECTION_INTERVAL_SECONDS", "60"))
+	intervalSeconds, _ := strconv.Atoi(envOr("NODE_HEARTBEAT_INTERVAL_SECONDS", "300"))
+	usageIntervalSeconds, _ := strconv.Atoi(envOr("NODE_USAGE_COLLECTION_INTERVAL_SECONDS", "600"))
 	usageSource := strings.TrimSpace(strings.ToLower(os.Getenv("NODE_USAGE_SOURCE")))
 	if usageSource == "" {
 		if strings.TrimSpace(os.Getenv("NODE_USAGE_INPUT_PATH")) != "" {
