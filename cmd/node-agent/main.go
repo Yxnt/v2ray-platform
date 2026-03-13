@@ -301,8 +301,34 @@ func queryRuntimeUsage(ctx context.Context, cfg config.NodeAgentConfig) ([]byte,
 }
 
 func parseUsageCounters(output []byte) (map[string]usageCounter, error) {
-	text := string(output)
 	counters := map[string]usageCounter{}
+
+	// Strategy 1: V2Ray 5.x / Xray JSON output
+	// {"stat":[{"name":"user>>>UUID>>>traffic>>>uplink","value":"12345"}]}
+	var jsonResp struct {
+		Stat []struct {
+			Name  string          `json:"name"`
+			Value json.RawMessage `json:"value"` // can be string "123" or number 123
+		} `json:"stat"`
+	}
+	if err := json.Unmarshal(output, &jsonResp); err == nil && len(jsonResp.Stat) > 0 {
+		for _, item := range jsonResp.Stat {
+			match := usageMetricNamePattern.FindStringSubmatch(item.Name)
+			if len(match) != 3 {
+				continue
+			}
+			// value may be JSON string "12345" or JSON number 12345
+			valStr := strings.Trim(string(item.Value), `"`)
+			applyUsageMetric(counters, match[1], match[2], valStr)
+		}
+		if len(counters) > 0 {
+			return counters, nil
+		}
+	}
+
+	// Strategy 2: protobuf text — name and value on the same line
+	// name: "user>>>UUID>>>traffic>>>uplink" value: 12345
+	text := string(output)
 	if matches := usageProtobufPattern.FindAllStringSubmatch(text, -1); len(matches) > 0 {
 		for _, match := range matches {
 			applyUsageMetric(counters, match[1], match[2], match[3])
@@ -311,6 +337,8 @@ func parseUsageCounters(output []byte) (map[string]usageCounter, error) {
 			return counters, nil
 		}
 	}
+
+	// Strategy 3: generic line-by-line (v2ctl legacy or unknown format)
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
