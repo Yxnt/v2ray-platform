@@ -1163,8 +1163,8 @@ func (svc *ControlPlaneService) handleAgentHeartbeat(w http.ResponseWriter, r *h
 		if arch == "" {
 			arch = "amd64"
 		}
-		// Refresh MD5 cache if stale (> 1 hour).
-		if svc.agentCache.age() > time.Hour {
+		// Refresh MD5 cache if stale (> 5 minutes).
+		if svc.agentCache.age() > 5*time.Minute {
 			go svc.refreshAgentMD5(arch)
 		}
 		if md5hex := svc.agentCache.get(arch); md5hex != "" {
