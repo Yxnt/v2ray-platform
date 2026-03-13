@@ -1485,6 +1485,7 @@
         const body = document.getElementById('panel-' + toggle.dataset.panel);
         if (!body) return;
         const open = body.classList.toggle('open');
+        body.style.display = open ? 'block' : '';  // explicitly override any inline style
         toggle.classList.toggle('open', open);
       });
     });
