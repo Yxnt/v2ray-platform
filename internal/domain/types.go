@@ -142,7 +142,8 @@ type NodeCredential struct {
 type ConfigRevision struct {
 	NodeID        string    `json:"node_id"`
 	ConfigVersion int64     `json:"config_version"`
-	Config        string    `json:"config"`
+	Config        string    `json:"config,omitempty"`
+	ConfigHash    string    `json:"config_hash,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 

@@ -307,10 +307,13 @@
 
 <!-- ── Node Config Modal ── -->
 <div class="edit-modal-overlay hidden" id="node-config-modal">
-  <div class="edit-modal-card" style="max-width:700px;width:95vw">
+  <div class="edit-modal-card" style="max-width:720px;width:95vw">
     <h2>Node Config <span id="node-config-title" style="font-weight:400;color:var(--text-muted);font-size:13px"></span></h2>
     <div id="node-config-sync-status" style="margin-bottom:10px;font-size:13px"></div>
-    <pre id="node-config-json" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:11px;overflow:auto;max-height:55vh;margin:0;white-space:pre-wrap;word-break:break-all;color:var(--text)"></pre>
+    <div id="node-config-revisions" style="margin-bottom:12px;font-size:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <span style="color:var(--text-dim)">Versions:</span>
+    </div>
+    <pre id="node-config-json" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:11px;overflow:auto;max-height:52vh;margin:0;white-space:pre-wrap;word-break:break-all;color:var(--text)"></pre>
     <div class="edit-modal-actions">
       <button class="btn btn-secondary" id="node-config-close">Close</button>
     </div>
@@ -1529,12 +1532,17 @@
         const modal = document.getElementById('node-config-modal');
         const pre = document.getElementById('node-config-json');
         const syncEl = document.getElementById('node-config-sync-status');
+        const revisionsEl = document.getElementById('node-config-revisions');
         document.getElementById('node-config-title').textContent = `— ${nodeName}`;
         pre.textContent = 'Loading…';
         syncEl.textContent = '';
+        revisionsEl.innerHTML = '<span style="color:var(--text-dim)">Versions:</span>';
         modal.classList.remove('hidden');
         try {
-          const data = await api(`/api/admin/nodes/${nodeConfigID}/config`);
+          const [data, { items: revisions }] = await Promise.all([
+            api(`/api/admin/nodes/${nodeConfigID}/config`),
+            api(`/api/admin/nodes/${nodeConfigID}/config/revisions`),
+          ]);
           // pretty-print the config JSON
           let pretty = data.config_json;
           try { pretty = JSON.stringify(JSON.parse(data.config_json), null, 2); } catch(_) {}
@@ -1552,6 +1560,40 @@
             }
           } else {
             syncEl.innerHTML = '<span style="color:var(--text-muted)">No sync events yet — node has not applied this config</span>';
+          }
+          // render revision history badges
+          for (const rev of (revisions || [])) {
+            const isCurrent = rev.config_version === data.config_version;
+            const badge = document.createElement('span');
+            badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px';
+            const label = document.createElement('span');
+            label.textContent = `v${rev.config_version}`;
+            label.title = `${new Date(rev.updated_at).toLocaleString()}  hash: ${rev.config_hash || ''}`;
+            label.style.cssText = `padding:2px 7px;border-radius:4px;font-size:11px;cursor:default;${isCurrent ? 'background:var(--accent,#0969da);color:#fff;font-weight:600' : 'background:var(--surface-2);color:var(--text-dim);border:1px solid var(--border)'}`;
+            badge.appendChild(label);
+            if (!isCurrent) {
+              const btn = document.createElement('button');
+              btn.textContent = '↩';
+              btn.title = `Rollback to v${rev.config_version}`;
+              btn.className = 'btn btn-secondary btn-xs';
+              btn.style.padding = '1px 5px';
+              btn.addEventListener('click', async () => {
+                if (!confirm(`Rollback to config v${rev.config_version}? A new version will be created with this content.`)) return;
+                try {
+                  const result = await api(`/api/admin/nodes/${nodeConfigID}/rollback-config`, {
+                    method: 'POST',
+                    body: JSON.stringify({ config_version: rev.config_version }),
+                  });
+                  toast(`✓ Rolled back — new config v${result.config_version}`, 'success');
+                  modal.classList.add('hidden');
+                  await refreshDashboard();
+                } catch (err) {
+                  toast(err.message, 'error');
+                }
+              });
+              badge.appendChild(btn);
+            }
+            revisionsEl.appendChild(badge);
           }
         } catch (error) {
           pre.textContent = `Error: ${error.message}`;

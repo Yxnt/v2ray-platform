@@ -126,6 +126,8 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Han
 	mux.HandleFunc("DELETE /api/admin/node-groups/{groupID}/grants/{memberID}", withAdmin(cfg, svc.sessions, svc.handleDeleteGroupGrant))
 	mux.HandleFunc("GET /api/admin/nodes", withAdmin(cfg, svc.sessions, svc.handleListNodes))
 	mux.HandleFunc("GET /api/admin/nodes/{nodeID}/config", withAdmin(cfg, svc.sessions, svc.handleGetNodeConfig))
+	mux.HandleFunc("GET /api/admin/nodes/{nodeID}/config/revisions", withAdmin(cfg, svc.sessions, svc.handleListNodeConfigRevisions))
+	mux.HandleFunc("POST /api/admin/nodes/{nodeID}/rollback-config", withAdmin(cfg, svc.sessions, svc.handleRollbackNodeConfig))
 	mux.HandleFunc("POST /api/admin/nodes/{nodeID}/rebuild-config", withAdmin(cfg, svc.sessions, svc.handleRebuildNodeConfig))
 	mux.HandleFunc("POST /api/admin/nodes/batch-rebuild", withAdmin(cfg, svc.sessions, svc.handleBatchRebuildNodes))
 	mux.HandleFunc("GET /api/admin/usage/nodes", withAdmin(cfg, svc.sessions, svc.handleListNodeUsage))
@@ -936,6 +938,37 @@ func (svc *ControlPlaneService) handleListNodes(w http.ResponseWriter, r *http.R
 		"items": items,
 		"count": len(items),
 	})
+}
+
+func (svc *ControlPlaneService) handleListNodeConfigRevisions(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeID")
+	revisions, err := svc.store.ListNodeConfigRevisions(nodeID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": revisions})
+}
+
+func (svc *ControlPlaneService) handleRollbackNodeConfig(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeID")
+	var req struct {
+		ConfigVersion int64 `json:"config_version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ConfigVersion == 0 {
+		writeError(w, http.StatusBadRequest, errors.New("config_version required"))
+		return
+	}
+	rev, err := svc.store.RollbackNodeConfig(nodeID, req.ConfigVersion)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "node.config_rolled_back", "node", nodeID, map[string]any{
+		"rolled_back_to_version": req.ConfigVersion,
+		"new_version":            rev.ConfigVersion,
+	})
+	writeJSON(w, http.StatusOK, rev)
 }
 
 func (svc *ControlPlaneService) handleRebuildNodeConfig(w http.ResponseWriter, r *http.Request) {

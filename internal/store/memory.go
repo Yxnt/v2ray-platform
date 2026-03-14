@@ -1159,3 +1159,19 @@ func (s *MemoryStore) GetMemberBySubscriptionToken(token string) (*domain.Member
 	}
 	return nil, ErrNotFound
 }
+
+func (s *MemoryStore) ListNodeConfigRevisions(nodeID string) ([]domain.ConfigRevision, error) {
+s.mu.RLock()
+defer s.mu.RUnlock()
+rev, ok := s.revisions[nodeID]
+if !ok {
+return []domain.ConfigRevision{}, nil
+}
+r := *rev
+r.Config = ""
+return []domain.ConfigRevision{r}, nil
+}
+
+func (s *MemoryStore) RollbackNodeConfig(_ string, _ int64) (*domain.ConfigRevision, error) {
+return nil, ErrNotFound
+}

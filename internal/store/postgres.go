@@ -1379,6 +1379,18 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 	if err != nil {
 		return nil, mapPQError(err)
 	}
+	// Prune: keep only the last 3 revisions per node.
+	_, _ = tx.Exec(
+		`DELETE FROM node_config_revisions
+		 WHERE node_id = $1
+		   AND config_version NOT IN (
+		     SELECT config_version FROM node_config_revisions
+		     WHERE node_id = $1
+		     ORDER BY config_version DESC
+		     LIMIT 3
+		   )`,
+		nodeID,
+	)
 	return &domain.ConfigRevision{
 		NodeID:        nodeID,
 		ConfigVersion: nextVersion,
@@ -1602,4 +1614,87 @@ func (s *PostgresStore) GetMemberBySubscriptionToken(token string) (*domain.Memb
 		return nil, ErrNotFound
 	}
 	return member, nil
+}
+
+func (s *PostgresStore) ListNodeConfigRevisions(nodeID string) ([]domain.ConfigRevision, error) {
+rows, err := s.db.Query(
+`SELECT node_id, config_version, config_hash, created_at
+ FROM node_config_revisions
+ WHERE node_id = $1
+ ORDER BY config_version DESC
+ LIMIT 3`,
+nodeID,
+)
+if err != nil {
+return nil, mapPQError(err)
+}
+defer rows.Close()
+var out []domain.ConfigRevision
+for rows.Next() {
+var rev domain.ConfigRevision
+if err := rows.Scan(&rev.NodeID, &rev.ConfigVersion, &rev.ConfigHash, &rev.UpdatedAt); err != nil {
+return nil, err
+}
+out = append(out, rev)
+}
+return out, nil
+}
+
+func (s *PostgresStore) RollbackNodeConfig(nodeID string, version int64) (*domain.ConfigRevision, error) {
+tx, err := s.db.BeginTx(context.Background(), nil)
+if err != nil {
+return nil, err
+}
+defer tx.Rollback()
+
+var configText, configHash string
+err = tx.QueryRow(
+`SELECT config_json::text, config_hash FROM node_config_revisions WHERE node_id = $1 AND config_version = $2`,
+nodeID, version,
+).Scan(&configText, &configHash)
+if errors.Is(err, sql.ErrNoRows) {
+return nil, ErrNotFound
+}
+if err != nil {
+return nil, mapPQError(err)
+}
+
+var nextVersion int64
+if err := tx.QueryRow(
+`SELECT COALESCE(MAX(config_version), 0) + 1 FROM node_config_revisions WHERE node_id = $1`, nodeID,
+).Scan(&nextVersion); err != nil {
+return nil, mapPQError(err)
+}
+
+now := time.Now().UTC()
+if _, err := tx.Exec(
+`INSERT INTO node_config_revisions (node_id, config_version, config_json, config_hash, created_at)
+ VALUES ($1, $2, $3::jsonb, $4, $5)`,
+nodeID, nextVersion, configText, configHash, now,
+); err != nil {
+return nil, mapPQError(err)
+}
+
+_, _ = tx.Exec(
+`DELETE FROM node_config_revisions
+ WHERE node_id = $1
+   AND config_version NOT IN (
+     SELECT config_version FROM node_config_revisions
+     WHERE node_id = $1
+     ORDER BY config_version DESC
+     LIMIT 3
+   )`,
+nodeID,
+)
+_, _ = tx.Exec(`UPDATE nodes SET updated_at = $2 WHERE id = $1`, nodeID, now)
+
+if err := tx.Commit(); err != nil {
+return nil, err
+}
+return &domain.ConfigRevision{
+NodeID:        nodeID,
+ConfigVersion: nextVersion,
+Config:        configText,
+UpdatedAt:     now,
+}, nil
 }

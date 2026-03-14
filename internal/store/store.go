@@ -80,6 +80,8 @@ type Store interface {
 	GetMemberUsageSince(memberID string, since time.Time) int64
 	GetMemberUsageSinceSplit(memberID string, since time.Time) (uplink, downlink int64)
 	RebuildNodeConfig(nodeID string) (*domain.ConfigRevision, error)
+	ListNodeConfigRevisions(nodeID string) ([]domain.ConfigRevision, error)
+	RollbackNodeConfig(nodeID string, version int64) (*domain.ConfigRevision, error)
 	RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error
 	ListAuditLogs() []domain.AuditLog
 	Close() error
