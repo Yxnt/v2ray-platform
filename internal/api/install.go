@@ -180,8 +180,9 @@ UNIT
 # ── enable and start all services ────────────────────────────────────────────
 systemctl daemon-reload
 systemctl enable --now v2ray
-systemctl enable --now nginx
 systemctl enable --now v2ray-platform-node-agent
+systemctl enable nginx
+systemctl reload-or-restart nginx
 
 echo "Node '${NODE_NAME}' bootstrap complete."
 `))
