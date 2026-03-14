@@ -456,8 +456,8 @@
     </div>
     <div class="toolbar-actions">
       <button id="batch-rebuild-nodes-btn" class="btn btn-secondary btn-sm">↺ Rebuild selected</button>
-      <select id="assign-group-select"></select>
-      <button id="assign-group-btn" class="btn btn-secondary btn-sm">Assign to group</button>
+      <select id="assign-group-select" multiple size="3" title="Hold Ctrl/⌘ to select multiple groups. Nothing selected = clear all groups."></select>
+      <button id="assign-group-btn" class="btn btn-secondary btn-sm" title="Replaces the selected nodes' group assignments with the chosen groups">Set groups</button>
       <button id="export-nodes-btn" class="btn btn-secondary btn-sm">↓ Export CSV</button>
     </div>
     <div class="table-wrap">
@@ -917,6 +917,8 @@
       }
     }
 
+    let groupIDsByNode = {};
+
     async function refreshDashboard() {
       await refreshSession();
       const nodeListURL = buildURL('/api/admin/nodes', {
@@ -974,9 +976,12 @@
       }
 
       const groupNamesByNode = {};
+      groupIDsByNode = {};
       for (const membership of nodeGroupMemberships.items) {
         if (!groupNamesByNode[membership.node_id]) groupNamesByNode[membership.node_id] = [];
+        if (!groupIDsByNode[membership.node_id]) groupIDsByNode[membership.node_id] = [];
         groupNamesByNode[membership.node_id].push(membership.group_name);
+        groupIDsByNode[membership.node_id].push(membership.group_id);
       }
       els.nodesBody.innerHTML = '';
       for (const node of nodes.items) {
@@ -1078,7 +1083,7 @@
       fillSelect(els.grantMember, allMembers.items, member => `${member.name} <${member.email}>`);
       fillSelect(els.groupGrantGroup, nodeGroups.items, group => group.name);
       fillSelect(els.groupGrantMember, allMembers.items, member => `${member.name} <${member.email}>`);
-      fillSelect(els.assignGroupSelect, [{ id: '', name: '— clear groups —' }, ...nodeGroups.items], group => group.name);
+      fillSelect(els.assignGroupSelect, nodeGroups.items, group => group.name);
       document.querySelectorAll('[data-select-all]').forEach(input => { input.checked = false; });
     }
 
@@ -1300,6 +1305,19 @@
       }
     });
 
+    // Pre-select current groups in multi-select when a single node checkbox is toggled.
+    els.nodesBody.addEventListener('change', event => {
+      const cb = event.target.closest('input[data-node-select]');
+      if (!cb) return;
+      const checked = [...document.querySelectorAll('input[data-node-select]:checked')];
+      if (checked.length !== 1) return; // only pre-select when exactly one node is chosen
+      const nodeID = checked[0].dataset.nodeSelect;
+      const currentGroups = new Set(groupIDsByNode[nodeID] || []);
+      for (const opt of els.assignGroupSelect.options) {
+        opt.selected = currentGroups.has(opt.value);
+      }
+    });
+
     document.querySelector('#batch-rebuild-nodes-btn').addEventListener('click', async () => {
       const nodeIDs = selectedValues('data-node-select');
       if (nodeIDs.length === 0) {
@@ -1327,7 +1345,7 @@
       try {
         await Promise.all(nodeIDs.map(nodeID => api(`/api/admin/nodes/${nodeID}/groups`, {
           method: 'POST',
-          body: JSON.stringify({ group_ids: els.assignGroupSelect.value ? [els.assignGroupSelect.value] : [] }),
+          body: JSON.stringify({ group_ids: [...els.assignGroupSelect.selectedOptions].map(o => o.value) }),
         })));
         await refreshDashboard();
       } catch (error) {
