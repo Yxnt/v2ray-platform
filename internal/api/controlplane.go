@@ -647,6 +647,50 @@ func (svc *ControlPlaneService) handlePublicClashSubscription(w http.ResponseWri
 		writeError(w, http.StatusForbidden, errors.New("account inactive"))
 		return
 	}
+
+	// Build Subscription-Userinfo header so Clash/Stash/etc. show usage stats.
+	// Format: upload=N; download=N; total=N; expire=N
+	// https://github.com/Dreamacro/clash/issues/1262
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	// Determine effective quota and whether it resets monthly.
+	var totalQuota int64
+	isMonthly := false
+	if member.TierID != "" {
+		for _, t := range svc.store.ListTiers() {
+			if t.ID == member.TierID {
+				totalQuota = t.QuotaBytes
+				isMonthly = t.QuotaType == "monthly"
+				break
+			}
+		}
+	}
+	if totalQuota == 0 && member.QuotaBytesLimit > 0 {
+		totalQuota = member.QuotaBytesLimit
+	}
+
+	var upload, download int64
+	usages := svc.store.ListMemberUsageSummaries()
+	for _, u := range usages {
+		if u.MemberID != member.ID {
+			continue
+		}
+		if isMonthly {
+			upload, download = svc.store.GetMemberUsageSinceSplit(member.ID, monthStart)
+		} else {
+			upload = u.UplinkBytes
+			download = u.DownlinkBytes
+		}
+		break
+	}
+
+	userinfo := fmt.Sprintf("upload=%d; download=%d; total=%d", upload, download, totalQuota)
+	if member.ExpiresAt != nil {
+		userinfo += fmt.Sprintf("; expire=%d", member.ExpiresAt.Unix())
+	}
+	w.Header().Set("Subscription-Userinfo", userinfo)
+
 	filename := "v2-subscription.yaml"
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))

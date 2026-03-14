@@ -78,6 +78,7 @@ type Store interface {
 	ListNodeUsageSummaries() []domain.NodeUsageSummary
 	ListMemberUsageSummaries() []domain.MemberUsageSummary
 	GetMemberUsageSince(memberID string, since time.Time) int64
+	GetMemberUsageSinceSplit(memberID string, since time.Time) (uplink, downlink int64)
 	RebuildNodeConfig(nodeID string) (*domain.ConfigRevision, error)
 	RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error
 	ListAuditLogs() []domain.AuditLog

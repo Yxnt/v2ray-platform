@@ -1581,6 +1581,16 @@ func (s *PostgresStore) GetMemberUsageSince(memberID string, since time.Time) in
 	return total
 }
 
+func (s *PostgresStore) GetMemberUsageSinceSplit(memberID string, since time.Time) (uplink, downlink int64) {
+	_ = s.db.QueryRow(
+		`SELECT COALESCE(SUM(uplink_bytes), 0), COALESCE(SUM(downlink_bytes), 0)
+		 FROM usage_snapshots
+		 WHERE member_id = $1 AND collected_at >= $2`,
+		memberID, since,
+	).Scan(&uplink, &downlink)
+	return
+}
+
 func (s *PostgresStore) GetMemberBySubscriptionToken(token string) (*domain.Member, error) {
 	row := s.db.QueryRow(
 		`SELECT id, uuid, name, email, note, status, expires_at, quota_bytes_limit, tier_id, subscription_token, disabled_reason, created_at, updated_at

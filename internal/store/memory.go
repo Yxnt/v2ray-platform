@@ -935,6 +935,18 @@ func (s *MemoryStore) GetMemberUsageSince(memberID string, since time.Time) int6
 	return total
 }
 
+func (s *MemoryStore) GetMemberUsageSinceSplit(memberID string, since time.Time) (uplink, downlink int64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, snap := range s.usageSnapshots {
+		if snap.MemberID == memberID && !snap.CollectedAt.Before(since) {
+			uplink += snap.UplinkBytes
+			downlink += snap.DownlinkBytes
+		}
+	}
+	return
+}
+
 func (s *MemoryStore) RebuildNodeConfig(nodeID string) (*domain.ConfigRevision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
