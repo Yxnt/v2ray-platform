@@ -91,6 +91,9 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 		tiers[t.ID] = t
 	}
 
+	// Pre-build a mapping of memberID → set of node IDs (direct grants + group-based grants).
+	nodeIDsForMember := m.buildMemberNodeIndex()
+
 	// Start of the current calendar month (UTC) for monthly-reset tiers.
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 
@@ -107,6 +110,7 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 			_ = m.store.RecordAuditLog("", "member.auto_expired", "member", member.ID, map[string]any{
 				"expires_at": member.ExpiresAt,
 			})
+			m.rebuildMemberNodes(nodeIDsForMember[member.ID])
 			continue
 		}
 
@@ -149,9 +153,51 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 				"quota_type":        quotaType,
 				"observed_total":    usedBytes,
 			})
+			m.rebuildMemberNodes(nodeIDsForMember[member.ID])
 		}
 	}
 	return nil
+}
+
+// buildMemberNodeIndex returns a map of memberID → set of node IDs that include that
+// member's credentials, covering both direct grants and group-based grants.
+func (m *Monitor) buildMemberNodeIndex() map[string]map[string]struct{} {
+	idx := map[string]map[string]struct{}{}
+
+	// Direct grants: GrantView has NodeID + MemberID.
+	for _, g := range m.store.ListGrants() {
+		if _, ok := idx[g.MemberID]; !ok {
+			idx[g.MemberID] = map[string]struct{}{}
+		}
+		idx[g.MemberID][g.NodeID] = struct{}{}
+	}
+
+	// Group-based grants: cross-join node group memberships × group grants.
+	// Build groupID → []nodeID first.
+	groupNodes := map[string][]string{}
+	for _, nm := range m.store.ListNodeGroupMemberships() {
+		groupNodes[nm.GroupID] = append(groupNodes[nm.GroupID], nm.NodeID)
+	}
+	for _, gg := range m.store.ListGroupGrantViews() {
+		for _, nodeID := range groupNodes[gg.GroupID] {
+			if _, ok := idx[gg.MemberID]; !ok {
+				idx[gg.MemberID] = map[string]struct{}{}
+			}
+			idx[gg.MemberID][nodeID] = struct{}{}
+		}
+	}
+
+	return idx
+}
+
+// rebuildMemberNodes triggers a config rebuild on each node in the given set.
+// Errors are logged but do not fail the sweep.
+func (m *Monitor) rebuildMemberNodes(nodeIDs map[string]struct{}) {
+	for nodeID := range nodeIDs {
+		if _, err := m.store.RebuildNodeConfig(nodeID); err != nil {
+			slog.Error("failed to rebuild node config after member status change", "node_id", nodeID, "error", err)
+		}
+	}
 }
 
 func (m *Monitor) ListAlerts() []domain.Alert {
