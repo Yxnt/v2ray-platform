@@ -554,20 +554,71 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 			return nil, err
 		}
 	}
+	// Queue pending additions/removals inside the transaction so they are
+	// atomic with the config rebuild — no window for a crash to leave them unwritten.
+	if input.Status != nil && len(affectedNodes) > 0 {
+		switch *input.Status {
+		case domain.MemberStatusActive:
+			// Member restored to active: queue immediate re-add via V2Ray API on next heartbeat.
+			for _, nodeID := range affectedNodes {
+				if _, err := tx.Exec(
+					`INSERT INTO pending_user_additions (node_id, member_uuid, member_email)
+					 VALUES ($1, $2, $3)
+					 ON CONFLICT (node_id, member_uuid) DO NOTHING`,
+					nodeID, member.UUID, member.Email,
+				); err != nil {
+					return nil, mapPQError(err)
+				}
+			}
+		case domain.MemberStatusSuspended, domain.MemberStatusExpired:
+			// Member suspended/expired: queue immediate removal via V2Ray API on next heartbeat.
+			for _, nodeID := range affectedNodes {
+				if _, err := tx.Exec(
+					`INSERT INTO pending_user_removals (node_id, member_uuid, member_email)
+					 VALUES ($1, $2, $3)
+					 ON CONFLICT (node_id, member_uuid) DO NOTHING`,
+					nodeID, member.UUID, member.Email,
+				); err != nil {
+					return nil, mapPQError(err)
+				}
+			}
+		}
+	}
+	// Auto-reactivate quota-suspended members when their quota is raised above usage.
+	if input.QuotaBytesLimit != nil && member.Status == domain.MemberStatusSuspended &&
+		strings.Contains(member.DisabledReason, "quota") && len(affectedNodes) > 0 {
+		// Check current usage against the new limit.
+		var usedBytes int64
+		if err := tx.QueryRow(
+			`SELECT COALESCE(SUM(bytes_up + bytes_down), 0) FROM usage_stats WHERE member_id = $1`,
+			memberID,
+		).Scan(&usedBytes); err == nil {
+			newLimit := *input.QuotaBytesLimit
+			if newLimit == 0 || usedBytes < newLimit {
+				// Quota no longer exceeded — restore active status.
+				member.Status = domain.MemberStatusActive
+				member.DisabledReason = ""
+				if _, err := tx.Exec(
+					`UPDATE members SET status = $2, disabled_reason = $3 WHERE id = $1`,
+					memberID, domain.MemberStatusActive, "",
+				); err != nil {
+					return nil, mapPQError(err)
+				}
+				for _, nodeID := range affectedNodes {
+					if _, err := tx.Exec(
+						`INSERT INTO pending_user_additions (node_id, member_uuid, member_email)
+						 VALUES ($1, $2, $3)
+						 ON CONFLICT (node_id, member_uuid) DO NOTHING`,
+						nodeID, member.UUID, member.Email,
+					); err != nil {
+						return nil, mapPQError(err)
+					}
+				}
+			}
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
-	}
-	// After commit: if status is being restored to active, queue immediate V2Ray API additions.
-	if input.Status != nil && *input.Status == domain.MemberStatusActive && len(affectedNodes) > 0 {
-		var additions []domain.PendingUserAddition
-		for _, nodeID := range affectedNodes {
-			additions = append(additions, domain.PendingUserAddition{
-				NodeID:      nodeID,
-				MemberUUID:  member.UUID,
-				MemberEmail: member.Email,
-			})
-		}
-		_ = s.AddPendingUserAdditions(additions)
 	}
 	return cloneMember(member), nil
 }
@@ -1204,7 +1255,7 @@ func (s *PostgresStore) AddPendingUserRemovals(removals []domain.PendingUserRemo
 		_, err := tx.Exec(
 			`INSERT INTO pending_user_removals (node_id, member_uuid, member_email)
 			 VALUES ($1, $2, $3)
-			 ON CONFLICT DO NOTHING`,
+			 ON CONFLICT (node_id, member_uuid) DO NOTHING`,
 			r.NodeID, r.MemberUUID, r.MemberEmail,
 		)
 		if err != nil {
@@ -1248,7 +1299,7 @@ func (s *PostgresStore) AddPendingUserAdditions(additions []domain.PendingUserAd
 		_, err := tx.Exec(
 			`INSERT INTO pending_user_additions (node_id, member_uuid, member_email)
 			 VALUES ($1, $2, $3)
-			 ON CONFLICT DO NOTHING`,
+			 ON CONFLICT (node_id, member_uuid) DO NOTHING`,
 			a.NodeID, a.MemberUUID, a.MemberEmail,
 		)
 		if err != nil {

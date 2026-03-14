@@ -192,6 +192,9 @@ func (m *Monitor) buildMemberNodeIndex() map[string]map[string]struct{} {
 
 // rebuildMemberNodes triggers a config rebuild on each node in the given set
 // and queues pending user removals for immediate V2Ray API removal on next heartbeat.
+// Removals are queued BEFORE the config rebuild so that if the process crashes mid-loop,
+// the agent will still receive the removal instruction on next heartbeat even if config
+// has already been rebuilt (idempotent: rmui on a missing user is a no-op).
 // Errors are logged but do not fail the sweep.
 func (m *Monitor) rebuildMemberNodes(member domain.Member, nodeIDs map[string]struct{}) {
 	var removals []domain.PendingUserRemoval
@@ -201,13 +204,17 @@ func (m *Monitor) rebuildMemberNodes(member domain.Member, nodeIDs map[string]st
 			MemberUUID:  member.UUID,
 			MemberEmail: member.Email,
 		})
-		if _, err := m.store.RebuildNodeConfig(nodeID); err != nil {
-			slog.Error("failed to rebuild node config after member status change", "node_id", nodeID, "error", err)
-		}
 	}
+	// Queue removals first — if we crash between this and the rebuild, the agent
+	// will still call rmui. V2Ray rmui on a user not present is safe (no-op).
 	if len(removals) > 0 {
 		if err := m.store.AddPendingUserRemovals(removals); err != nil {
 			slog.Error("failed to queue pending user removals", "member_id", member.ID, "error", err)
+		}
+	}
+	for nodeID := range nodeIDs {
+		if _, err := m.store.RebuildNodeConfig(nodeID); err != nil {
+			slog.Error("failed to rebuild node config after member status change", "node_id", nodeID, "error", err)
 		}
 	}
 }

@@ -534,8 +534,9 @@ func removeV2RayUser(cfg config.NodeAgentConfig, email string) error {
 func addV2RayUser(cfg config.NodeAgentConfig, uuid, email string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	// Build the user JSON for v2ray api adui.
-	userJSON := fmt.Sprintf(`{"id":"%s","alterId":0,"email":"%s","security":"auto"}`, uuid, email)
+	// VMess inbound user JSON — only id/alterId/email/level are valid server-side fields.
+	// The "security" field is a client-side concept and must be omitted here.
+	userJSON := fmt.Sprintf(`{"id":"%s","alterId":0,"email":"%s","level":0}`, uuid, email)
 	cmd := exec.CommandContext(ctx,
 		"v2ray", "api", "adui",
 		"--server="+cfg.UsageQueryServer,
