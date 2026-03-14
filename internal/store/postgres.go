@@ -526,8 +526,16 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 			return nil, mapPQError(err)
 		}
 	}
-	// Rebuild config for all nodes this member has grants on.
-	affectedRows, err := tx.Query(`SELECT DISTINCT node_id FROM member_access_grants WHERE member_id = $1`, memberID)
+	// Rebuild config for all nodes this member has grants on (direct + group-based).
+	affectedRows, err := tx.Query(
+		`SELECT DISTINCT node_id FROM member_access_grants WHERE member_id = $1
+		 UNION
+		 SELECT DISTINCT ngm.node_id
+		 FROM node_group_memberships ngm
+		 JOIN member_node_group_grants mg ON mg.group_id = ngm.group_id
+		 WHERE mg.member_id = $1`,
+		memberID,
+	)
 	if err != nil {
 		return nil, mapPQError(err)
 	}
@@ -548,6 +556,18 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+	// After commit: if status is being restored to active, queue immediate V2Ray API additions.
+	if input.Status != nil && *input.Status == domain.MemberStatusActive && len(affectedNodes) > 0 {
+		var additions []domain.PendingUserAddition
+		for _, nodeID := range affectedNodes {
+			additions = append(additions, domain.PendingUserAddition{
+				NodeID:      nodeID,
+				MemberUUID:  member.UUID,
+				MemberEmail: member.Email,
+			})
+		}
+		_ = s.AddPendingUserAdditions(additions)
 	}
 	return cloneMember(member), nil
 }
@@ -1211,6 +1231,50 @@ func (s *PostgresStore) GetAndClearPendingRemovals(nodeID string) ([]domain.Pend
 			return nil, mapPQError(err)
 		}
 		out = append(out, r)
+	}
+	return out, nil
+}
+
+func (s *PostgresStore) AddPendingUserAdditions(additions []domain.PendingUserAddition) error {
+	if len(additions) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return mapPQError(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, a := range additions {
+		_, err := tx.Exec(
+			`INSERT INTO pending_user_additions (node_id, member_uuid, member_email)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT DO NOTHING`,
+			a.NodeID, a.MemberUUID, a.MemberEmail,
+		)
+		if err != nil {
+			return mapPQError(err)
+		}
+	}
+	return mapPQError(tx.Commit())
+}
+
+func (s *PostgresStore) GetAndClearPendingAdditions(nodeID string) ([]domain.PendingUserAddition, error) {
+	rows, err := s.db.Query(
+		`DELETE FROM pending_user_additions WHERE node_id = $1
+		 RETURNING id, node_id, member_uuid, member_email, created_at`,
+		nodeID,
+	)
+	if err != nil {
+		return nil, mapPQError(err)
+	}
+	defer rows.Close()
+	var out []domain.PendingUserAddition
+	for rows.Next() {
+		var a domain.PendingUserAddition
+		if err := rows.Scan(&a.ID, &a.NodeID, &a.MemberUUID, &a.MemberEmail, &a.CreatedAt); err != nil {
+			return nil, mapPQError(err)
+		}
+		out = append(out, a)
 	}
 	return out, nil
 }

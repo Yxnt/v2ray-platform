@@ -82,7 +82,8 @@ type MemoryStore struct {
 	syncEvents      []*domain.NodeSyncEvent
 	auditLogs       []*domain.AuditLog
 	usageSnapshots  []memoryUsageSnapshot
-	pendingRemovals []domain.PendingUserRemoval
+	pendingRemovals  []domain.PendingUserRemoval
+	pendingAdditions []domain.PendingUserAddition
 }
 
 type memoryUsageSnapshot struct {
@@ -998,6 +999,36 @@ func (s *MemoryStore) GetAndClearPendingRemovals(nodeID string) ([]domain.Pendin
 		}
 	}
 	s.pendingRemovals = remaining
+	return out, nil
+}
+
+func (s *MemoryStore) AddPendingUserAdditions(additions []domain.PendingUserAddition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, a := range additions {
+		if a.ID == "" {
+			a.ID = fmt.Sprintf("pa-%d", time.Now().UnixNano())
+		}
+		if a.CreatedAt.IsZero() {
+			a.CreatedAt = time.Now().UTC()
+		}
+		s.pendingAdditions = append(s.pendingAdditions, a)
+	}
+	return nil
+}
+
+func (s *MemoryStore) GetAndClearPendingAdditions(nodeID string) ([]domain.PendingUserAddition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out, remaining []domain.PendingUserAddition
+	for _, a := range s.pendingAdditions {
+		if a.NodeID == nodeID {
+			out = append(out, a)
+		} else {
+			remaining = append(remaining, a)
+		}
+	}
+	s.pendingAdditions = remaining
 	return out, nil
 }
 

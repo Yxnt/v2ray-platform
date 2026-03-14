@@ -86,6 +86,8 @@ type Store interface {
 	RollbackNodeConfig(nodeID string, version int64) (*domain.ConfigRevision, error)
 	AddPendingUserRemovals(removals []domain.PendingUserRemoval) error
 	GetAndClearPendingRemovals(nodeID string) ([]domain.PendingUserRemoval, error)
+	AddPendingUserAdditions(additions []domain.PendingUserAddition) error
+	GetAndClearPendingAdditions(nodeID string) ([]domain.PendingUserAddition, error)
 	RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error
 	ListAuditLogs(page, limit int) ([]domain.AuditLog, int64, error)
 	Close() error

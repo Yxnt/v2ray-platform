@@ -64,6 +64,7 @@ type heartbeatResponse struct {
 	AgentMD5         string           `json:"agent_md5,omitempty"`
 	AgentDownloadURL string           `json:"agent_download_url,omitempty"`
 	PendingRemovals  []pendingRemoval `json:"pending_removals,omitempty"`
+	PendingAdditions []pendingRemoval `json:"pending_additions,omitempty"` // same shape as removal
 }
 
 type pendingRemoval struct {
@@ -147,6 +148,14 @@ func main() {
 					log.Printf("v2ray rmui failed (uuid=%s email=%s): %v", r.MemberUUID, r.MemberEmail, err)
 				} else {
 					log.Printf("[remove] removed user from V2Ray runtime (email=%s)", r.MemberEmail)
+				}
+			}
+			// Immediately re-add restored users to the running V2Ray instance.
+			for _, a := range hbResp.PendingAdditions {
+				if err := addV2RayUser(cfg, a.MemberUUID, a.MemberEmail); err != nil {
+					log.Printf("v2ray adui failed (uuid=%s email=%s): %v", a.MemberUUID, a.MemberEmail, err)
+				} else {
+					log.Printf("[add] re-added user to V2Ray runtime (email=%s)", a.MemberEmail)
 				}
 			}
 		}
@@ -512,6 +521,26 @@ func removeV2RayUser(cfg config.NodeAgentConfig, email string) error {
 		"--server="+cfg.UsageQueryServer,
 		"-inboundTag=vmess-inbound",
 		"-email="+email,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// addV2RayUser calls "v2ray api adui" to dynamically re-add a restored user to the
+// running V2Ray instance without reloading the config file.
+func addV2RayUser(cfg config.NodeAgentConfig, uuid, email string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Build the user JSON for v2ray api adui.
+	userJSON := fmt.Sprintf(`{"id":"%s","alterId":0,"email":"%s","security":"auto"}`, uuid, email)
+	cmd := exec.CommandContext(ctx,
+		"v2ray", "api", "adui",
+		"--server="+cfg.UsageQueryServer,
+		"-inboundTag=vmess-inbound",
+		"-users="+userJSON,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

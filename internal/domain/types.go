@@ -179,6 +179,17 @@ type PendingUserRemoval struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// PendingUserAddition instructs the node-agent to immediately re-add a user to the
+// running V2Ray instance via the gRPC API (v2ray api adui) when their status is
+// restored to active. The config rebuild also includes them for persistence.
+type PendingUserAddition struct {
+	ID          string    `json:"id"`
+	NodeID      string    `json:"node_id"`
+	MemberUUID  string    `json:"member_uuid"`
+	MemberEmail string    `json:"member_email"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type UsageSnapshot struct {
 	CredentialUUID string    `json:"credential_uuid"`
 	UplinkBytes    int64     `json:"uplink_bytes"`

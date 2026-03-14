@@ -282,6 +282,7 @@ type heartbeatResponse struct {
 	AgentMD5         string                       `json:"agent_md5,omitempty"`
 	AgentDownloadURL string                       `json:"agent_download_url,omitempty"`
 	PendingRemovals  []domain.PendingUserRemoval  `json:"pending_removals,omitempty"`
+	PendingAdditions []domain.PendingUserAddition `json:"pending_additions,omitempty"`
 }
 
 type syncResultRequest struct {
@@ -1341,6 +1342,10 @@ func (svc *ControlPlaneService) handleAgentHeartbeat(w http.ResponseWriter, r *h
 	// Include any pending user removals for immediate V2Ray API removal.
 	if removals, err := svc.store.GetAndClearPendingRemovals(node.ID); err == nil && len(removals) > 0 {
 		resp.PendingRemovals = removals
+	}
+	// Include any pending user additions for immediate V2Ray API re-add.
+	if additions, err := svc.store.GetAndClearPendingAdditions(node.ID); err == nil && len(additions) > 0 {
+		resp.PendingAdditions = additions
 	}
 	if svc.agentDownloadURL != "" {
 		arch := req.Arch
