@@ -622,9 +622,8 @@ func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r
 		writeError(w, http.StatusNotFound, errors.New("member not found"))
 		return
 	}
-	filename := "v2-subscription.yaml"
 	w.Header().Set("Content-Type", "application/yaml")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
+	w.Header().Set("Content-Disposition", `attachment; filename="v2-subscription"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(svc.buildMemberClashYAML(member))
 }
@@ -691,9 +690,8 @@ func (svc *ControlPlaneService) handlePublicClashSubscription(w http.ResponseWri
 	}
 	w.Header().Set("Subscription-Userinfo", userinfo)
 
-	filename := "v2-subscription.yaml"
 	w.Header().Set("Content-Type", "application/yaml")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
+	w.Header().Set("Content-Disposition", `attachment; filename="v2-subscription"`)
 	// Clash clients poll this URL; tell them to re-fetch every hour.
 	w.Header().Set("Profile-Update-Interval", "1")
 	w.WriteHeader(http.StatusOK)
