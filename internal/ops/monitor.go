@@ -46,13 +46,13 @@ func (m *Monitor) Start() {
 			ticker := time.NewTicker(m.cfg.LifecycleSweepInterval)
 			defer ticker.Stop()
 			for {
-				if err := m.SweepMemberPolicies(time.Now().UTC()); err != nil {
-					slog.Error("lifecycle sweep failed", "error", err)
-				}
 				select {
 				case <-m.stop:
 					return
 				case <-ticker.C:
+				}
+				if err := m.SweepMemberPolicies(time.Now().UTC()); err != nil {
+					slog.Error("lifecycle sweep failed", "error", err)
 				}
 			}
 		}()
@@ -91,9 +91,6 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 		tiers[t.ID] = t
 	}
 
-	// Pre-build a mapping of memberID → set of node IDs (direct grants + group-based grants).
-	nodeIDsForMember := m.buildMemberNodeIndex()
-
 	// Start of the current calendar month (UTC) for monthly-reset tiers.
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 
@@ -107,10 +104,11 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 			}); err != nil {
 				return err
 			}
+			// UpdateMember already queues pending_user_removals and rebuilds node configs
+			// atomically inside its transaction — no separate rebuildMemberNodes call needed.
 			_ = m.store.RecordAuditLog("", "member.auto_expired", "member", member.ID, map[string]any{
 				"expires_at": member.ExpiresAt,
 			})
-			m.rebuildMemberNodes(member, nodeIDsForMember[member.ID])
 			continue
 		}
 
@@ -148,75 +146,15 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 			}); err != nil {
 				return err
 			}
+			// UpdateMember already queues pending_user_removals and rebuilds node configs.
 			_ = m.store.RecordAuditLog("", "member.auto_suspended_quota", "member", member.ID, map[string]any{
 				"quota_bytes_limit": effectiveQuota,
 				"quota_type":        quotaType,
 				"observed_total":    usedBytes,
 			})
-			m.rebuildMemberNodes(member, nodeIDsForMember[member.ID])
 		}
 	}
 	return nil
-}
-
-// buildMemberNodeIndex returns a map of memberID → set of node IDs that include that
-// member's credentials, covering both direct grants and group-based grants.
-func (m *Monitor) buildMemberNodeIndex() map[string]map[string]struct{} {
-	idx := map[string]map[string]struct{}{}
-
-	// Direct grants: GrantView has NodeID + MemberID.
-	for _, g := range m.store.ListGrants() {
-		if _, ok := idx[g.MemberID]; !ok {
-			idx[g.MemberID] = map[string]struct{}{}
-		}
-		idx[g.MemberID][g.NodeID] = struct{}{}
-	}
-
-	// Group-based grants: cross-join node group memberships × group grants.
-	// Build groupID → []nodeID first.
-	groupNodes := map[string][]string{}
-	for _, nm := range m.store.ListNodeGroupMemberships() {
-		groupNodes[nm.GroupID] = append(groupNodes[nm.GroupID], nm.NodeID)
-	}
-	for _, gg := range m.store.ListGroupGrantViews() {
-		for _, nodeID := range groupNodes[gg.GroupID] {
-			if _, ok := idx[gg.MemberID]; !ok {
-				idx[gg.MemberID] = map[string]struct{}{}
-			}
-			idx[gg.MemberID][nodeID] = struct{}{}
-		}
-	}
-
-	return idx
-}
-
-// rebuildMemberNodes triggers a config rebuild on each node in the given set
-// and queues pending user removals for immediate V2Ray API removal on next heartbeat.
-// Removals are queued BEFORE the config rebuild so that if the process crashes mid-loop,
-// the agent will still receive the removal instruction on next heartbeat even if config
-// has already been rebuilt (idempotent: rmui on a missing user is a no-op).
-// Errors are logged but do not fail the sweep.
-func (m *Monitor) rebuildMemberNodes(member domain.Member, nodeIDs map[string]struct{}) {
-	var removals []domain.PendingUserRemoval
-	for nodeID := range nodeIDs {
-		removals = append(removals, domain.PendingUserRemoval{
-			NodeID:      nodeID,
-			MemberUUID:  member.UUID,
-			MemberEmail: member.Email,
-		})
-	}
-	// Queue removals first — if we crash between this and the rebuild, the agent
-	// will still call rmui. V2Ray rmui on a user not present is safe (no-op).
-	if len(removals) > 0 {
-		if err := m.store.AddPendingUserRemovals(removals); err != nil {
-			slog.Error("failed to queue pending user removals", "member_id", member.ID, "error", err)
-		}
-	}
-	for nodeID := range nodeIDs {
-		if _, err := m.store.RebuildNodeConfig(nodeID); err != nil {
-			slog.Error("failed to rebuild node config after member status change", "node_id", nodeID, "error", err)
-		}
-	}
 }
 
 func (m *Monitor) ListAlerts() []domain.Alert {

@@ -681,6 +681,11 @@ func (svc *ControlPlaneService) handlePublicClashSubscription(w http.ResponseWri
 		writeError(w, http.StatusForbidden, errors.New("account inactive"))
 		return
 	}
+	// Check expiry in real-time — the background sweep may not have run yet.
+	if member.ExpiresAt != nil && !member.ExpiresAt.After(time.Now().UTC()) {
+		writeError(w, http.StatusForbidden, errors.New("account expired"))
+		return
+	}
 
 	// Build Subscription-Userinfo header so Clash/Stash/etc. show usage stats.
 	// Format: upload=N; download=N; total=N; expire=N

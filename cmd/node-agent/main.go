@@ -143,19 +143,21 @@ func main() {
 			}
 			// Immediately remove suspended/expired users from the running V2Ray instance
 			// via the gRPC API, without waiting for a full config reload.
+			// V2Ray identifies users by the "email" field set in config, which is the
+			// credential UUID (not the human email address).
 			for _, r := range hbResp.PendingRemovals {
-				if err := removeV2RayUser(cfg, r.MemberEmail); err != nil {
+				if err := removeV2RayUser(cfg, r.MemberUUID); err != nil {
 					log.Printf("v2ray rmui failed (uuid=%s email=%s): %v", r.MemberUUID, r.MemberEmail, err)
 				} else {
-					log.Printf("[remove] removed user from V2Ray runtime (email=%s)", r.MemberEmail)
+					log.Printf("[remove] removed user from V2Ray runtime (uuid=%s)", r.MemberUUID)
 				}
 			}
 			// Immediately re-add restored users to the running V2Ray instance.
 			for _, a := range hbResp.PendingAdditions {
-				if err := addV2RayUser(cfg, a.MemberUUID, a.MemberEmail); err != nil {
+				if err := addV2RayUser(cfg, a.MemberUUID); err != nil {
 					log.Printf("v2ray adui failed (uuid=%s email=%s): %v", a.MemberUUID, a.MemberEmail, err)
 				} else {
-					log.Printf("[add] re-added user to V2Ray runtime (email=%s)", a.MemberEmail)
+					log.Printf("[add] re-added user to V2Ray runtime (uuid=%s)", a.MemberUUID)
 				}
 			}
 		}
@@ -511,16 +513,16 @@ func runReload(ctx context.Context, command string) error {
 
 // removeV2RayUser calls "v2ray api rmui" to dynamically remove a user from the
 // running V2Ray instance without reloading the config file.
-// This provides immediate effect; the config rebuild (already triggered by the control
-// plane) ensures the user is excluded from the next persisted config as well.
-func removeV2RayUser(cfg config.NodeAgentConfig, email string) error {
+// identifier is the value set as the "email" field in V2Ray config by RenderNodeConfig,
+// which is the member's credential UUID — NOT their human email address.
+func removeV2RayUser(cfg config.NodeAgentConfig, identifier string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx,
 		"v2ray", "api", "rmui",
 		"--server="+cfg.UsageQueryServer,
 		"-inboundTag=vmess-inbound",
-		"-email="+email,
+		"-email="+identifier,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -531,12 +533,14 @@ func removeV2RayUser(cfg config.NodeAgentConfig, email string) error {
 
 // addV2RayUser calls "v2ray api adui" to dynamically re-add a restored user to the
 // running V2Ray instance without reloading the config file.
-func addV2RayUser(cfg config.NodeAgentConfig, uuid, email string) error {
+// uuid is the member's credential UUID, used as BOTH the V2Ray user ID and the "email"
+// field — matching exactly how RenderNodeConfig writes the vmess client config.
+func addV2RayUser(cfg config.NodeAgentConfig, uuid string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	// VMess inbound user JSON — only id/alterId/email/level are valid server-side fields.
-	// The "security" field is a client-side concept and must be omitted here.
-	userJSON := fmt.Sprintf(`{"id":"%s","alterId":0,"email":"%s","level":0}`, uuid, email)
+	// The "email" in V2Ray is the UUID string — must match what RenderNodeConfig wrote.
+	// Valid server-side VMess user fields: id, alterId, email, level.
+	userJSON := fmt.Sprintf(`{"id":"%s","alterId":0,"email":"%s","level":0}`, uuid, uuid)
 	cmd := exec.CommandContext(ctx,
 		"v2ray", "api", "adui",
 		"--server="+cfg.UsageQueryServer,

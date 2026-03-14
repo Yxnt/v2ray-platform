@@ -590,7 +590,7 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 		// Check current usage against the new limit.
 		var usedBytes int64
 		if err := tx.QueryRow(
-			`SELECT COALESCE(SUM(bytes_up + bytes_down), 0) FROM usage_stats WHERE member_id = $1`,
+			`SELECT COALESCE(SUM(uplink_bytes + downlink_bytes), 0) FROM usage_snapshots WHERE member_id = $1`,
 			memberID,
 		).Scan(&usedBytes); err == nil {
 			newLimit := *input.QuotaBytesLimit
@@ -971,7 +971,17 @@ func (s *PostgresStore) DeleteMember(memberID string) error {
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.Query(`SELECT DISTINCT node_id FROM member_access_grants WHERE member_id = $1`, memberID)
+	// Collect all nodes this member has access to — direct grants AND group-based grants —
+	// so their configs can be rebuilt after deletion.
+	rows, err := tx.Query(
+		`SELECT DISTINCT node_id FROM member_access_grants WHERE member_id = $1
+		 UNION
+		 SELECT DISTINCT ngm.node_id
+		 FROM node_group_memberships ngm
+		 JOIN member_node_group_grants mg ON mg.group_id = ngm.group_id
+		 WHERE mg.member_id = $1`,
+		memberID,
+	)
 	if err != nil {
 		return mapPQError(err)
 	}
@@ -1903,11 +1913,30 @@ UpdatedAt:     now,
 }
 
 func (s *PostgresStore) SetNodeProxy(nodeID, proxyNodeID string) error {
-var err error
-if proxyNodeID == "" {
-_, err = s.db.Exec(`UPDATE nodes SET proxy_node_id = NULL, updated_at = NOW() WHERE id = $1`, nodeID)
-} else {
-_, err = s.db.Exec(`UPDATE nodes SET proxy_node_id = $2, updated_at = NOW() WHERE id = $1`, nodeID, proxyNodeID)
-}
-return mapPQError(err)
+	if proxyNodeID == "" {
+		_, err := s.db.Exec(`UPDATE nodes SET proxy_node_id = NULL, updated_at = NOW() WHERE id = $1`, nodeID)
+		return mapPQError(err)
+	}
+	// Prevent self-loops.
+	if nodeID == proxyNodeID {
+		return fmt.Errorf("node cannot proxy through itself")
+	}
+	// Prevent indirect cycles by walking the existing proxy chain.
+	// Maximum chain length guard prevents infinite loops if data is inconsistent.
+	visited := map[string]struct{}{nodeID: {}}
+	current := proxyNodeID
+	for i := 0; i < 20; i++ {
+		if _, seen := visited[current]; seen {
+			return fmt.Errorf("proxy chain would create a cycle")
+		}
+		visited[current] = struct{}{}
+		var next *string
+		err := s.db.QueryRow(`SELECT proxy_node_id FROM nodes WHERE id = $1`, current).Scan(&next)
+		if err != nil || next == nil {
+			break
+		}
+		current = *next
+	}
+	_, err := s.db.Exec(`UPDATE nodes SET proxy_node_id = $2, updated_at = NOW() WHERE id = $1`, nodeID, proxyNodeID)
+	return mapPQError(err)
 }
