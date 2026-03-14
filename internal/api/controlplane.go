@@ -278,9 +278,10 @@ type heartbeatRequest struct {
 }
 
 type heartbeatResponse struct {
-	Status            string `json:"status"`
-	AgentMD5          string `json:"agent_md5,omitempty"`
-	AgentDownloadURL  string `json:"agent_download_url,omitempty"`
+	Status           string                       `json:"status"`
+	AgentMD5         string                       `json:"agent_md5,omitempty"`
+	AgentDownloadURL string                       `json:"agent_download_url,omitempty"`
+	PendingRemovals  []domain.PendingUserRemoval  `json:"pending_removals,omitempty"`
 }
 
 type syncResultRequest struct {
@@ -1326,16 +1327,21 @@ func (svc *ControlPlaneService) handleAgentHeartbeat(w http.ResponseWriter, r *h
 		return
 	}
 	token := bearerToken(r.Header.Get("Authorization"))
-	if _, err := svc.store.Heartbeat(store.HeartbeatInput{
+	node, err := svc.store.Heartbeat(store.HeartbeatInput{
 		NodeToken:            token,
 		AppliedConfigVersion: req.AppliedConfigVersion,
 		PublicHost:           req.PublicHost,
 		Status:               req.Status,
-	}); err != nil {
+	})
+	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	resp := heartbeatResponse{Status: "ok"}
+	// Include any pending user removals for immediate V2Ray API removal.
+	if removals, err := svc.store.GetAndClearPendingRemovals(node.ID); err == nil && len(removals) > 0 {
+		resp.PendingRemovals = removals
+	}
 	if svc.agentDownloadURL != "" {
 		arch := req.Arch
 		if arch == "" {

@@ -110,7 +110,7 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 			_ = m.store.RecordAuditLog("", "member.auto_expired", "member", member.ID, map[string]any{
 				"expires_at": member.ExpiresAt,
 			})
-			m.rebuildMemberNodes(nodeIDsForMember[member.ID])
+			m.rebuildMemberNodes(member, nodeIDsForMember[member.ID])
 			continue
 		}
 
@@ -153,7 +153,7 @@ func (m *Monitor) SweepMemberPolicies(now time.Time) error {
 				"quota_type":        quotaType,
 				"observed_total":    usedBytes,
 			})
-			m.rebuildMemberNodes(nodeIDsForMember[member.ID])
+			m.rebuildMemberNodes(member, nodeIDsForMember[member.ID])
 		}
 	}
 	return nil
@@ -190,12 +190,24 @@ func (m *Monitor) buildMemberNodeIndex() map[string]map[string]struct{} {
 	return idx
 }
 
-// rebuildMemberNodes triggers a config rebuild on each node in the given set.
+// rebuildMemberNodes triggers a config rebuild on each node in the given set
+// and queues pending user removals for immediate V2Ray API removal on next heartbeat.
 // Errors are logged but do not fail the sweep.
-func (m *Monitor) rebuildMemberNodes(nodeIDs map[string]struct{}) {
+func (m *Monitor) rebuildMemberNodes(member domain.Member, nodeIDs map[string]struct{}) {
+	var removals []domain.PendingUserRemoval
 	for nodeID := range nodeIDs {
+		removals = append(removals, domain.PendingUserRemoval{
+			NodeID:      nodeID,
+			MemberUUID:  member.UUID,
+			MemberEmail: member.Email,
+		})
 		if _, err := m.store.RebuildNodeConfig(nodeID); err != nil {
 			slog.Error("failed to rebuild node config after member status change", "node_id", nodeID, "error", err)
+		}
+	}
+	if len(removals) > 0 {
+		if err := m.store.AddPendingUserRemovals(removals); err != nil {
+			slog.Error("failed to queue pending user removals", "member_id", member.ID, "error", err)
 		}
 	}
 }

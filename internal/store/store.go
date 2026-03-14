@@ -84,6 +84,8 @@ type Store interface {
 	RebuildNodeConfig(nodeID string) (*domain.ConfigRevision, error)
 	ListNodeConfigRevisions(nodeID string) ([]domain.ConfigRevision, error)
 	RollbackNodeConfig(nodeID string, version int64) (*domain.ConfigRevision, error)
+	AddPendingUserRemovals(removals []domain.PendingUserRemoval) error
+	GetAndClearPendingRemovals(nodeID string) ([]domain.PendingUserRemoval, error)
 	RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error
 	ListAuditLogs(page, limit int) ([]domain.AuditLog, int64, error)
 	Close() error

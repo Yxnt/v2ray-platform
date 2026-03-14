@@ -82,6 +82,7 @@ type MemoryStore struct {
 	syncEvents      []*domain.NodeSyncEvent
 	auditLogs       []*domain.AuditLog
 	usageSnapshots  []memoryUsageSnapshot
+	pendingRemovals []domain.PendingUserRemoval
 }
 
 type memoryUsageSnapshot struct {
@@ -968,6 +969,36 @@ func (s *MemoryStore) RebuildNodeConfig(nodeID string) (*domain.ConfigRevision, 
 	defer s.mu.Unlock()
 
 	return s.rebuildNodeConfigLocked(nodeID)
+}
+
+func (s *MemoryStore) AddPendingUserRemovals(removals []domain.PendingUserRemoval) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range removals {
+		if r.ID == "" {
+			r.ID = fmt.Sprintf("pr-%d", time.Now().UnixNano())
+		}
+		if r.CreatedAt.IsZero() {
+			r.CreatedAt = time.Now().UTC()
+		}
+		s.pendingRemovals = append(s.pendingRemovals, r)
+	}
+	return nil
+}
+
+func (s *MemoryStore) GetAndClearPendingRemovals(nodeID string) ([]domain.PendingUserRemoval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out, remaining []domain.PendingUserRemoval
+	for _, r := range s.pendingRemovals {
+		if r.NodeID == nodeID {
+			out = append(out, r)
+		} else {
+			remaining = append(remaining, r)
+		}
+	}
+	s.pendingRemovals = remaining
+	return out, nil
 }
 
 func (s *MemoryStore) RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error {

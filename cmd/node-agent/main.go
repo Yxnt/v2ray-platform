@@ -60,9 +60,15 @@ type heartbeatRequest struct {
 }
 
 type heartbeatResponse struct {
-	Status           string `json:"status"`
-	AgentMD5         string `json:"agent_md5,omitempty"`
-	AgentDownloadURL string `json:"agent_download_url,omitempty"`
+	Status           string           `json:"status"`
+	AgentMD5         string           `json:"agent_md5,omitempty"`
+	AgentDownloadURL string           `json:"agent_download_url,omitempty"`
+	PendingRemovals  []pendingRemoval `json:"pending_removals,omitempty"`
+}
+
+type pendingRemoval struct {
+	MemberUUID  string `json:"member_uuid"`
+	MemberEmail string `json:"member_email"`
 }
 
 type syncRequest struct {
@@ -126,12 +132,23 @@ func main() {
 	for {
 		if hbResp, err := heartbeat(cfg, client, state, appliedVersion); err != nil {
 			log.Printf("heartbeat failed: %v", err)
-		} else if hbResp.AgentMD5 != "" && hbResp.AgentDownloadURL != "" {
-			// Check if we need to self-update.
-			if err := maybeSelfUpdate(hbResp.AgentMD5, hbResp.AgentDownloadURL); err != nil {
-				log.Printf("self-update check failed: %v", err)
+		} else {
+			if hbResp.AgentMD5 != "" && hbResp.AgentDownloadURL != "" {
+				// Check if we need to self-update.
+				if err := maybeSelfUpdate(hbResp.AgentMD5, hbResp.AgentDownloadURL); err != nil {
+					log.Printf("self-update check failed: %v", err)
+				}
+				// maybeSelfUpdate calls os.Exit on success, so we only reach here if no update needed.
 			}
-			// maybeSelfUpdate calls os.Exit on success, so we only reach here if no update needed.
+			// Immediately remove suspended/expired users from the running V2Ray instance
+			// via the gRPC API, without waiting for a full config reload.
+			for _, r := range hbResp.PendingRemovals {
+				if err := removeV2RayUser(cfg, r.MemberEmail); err != nil {
+					log.Printf("v2ray rmui failed (uuid=%s email=%s): %v", r.MemberUUID, r.MemberEmail, err)
+				} else {
+					log.Printf("[remove] removed user from V2Ray runtime (email=%s)", r.MemberEmail)
+				}
+			}
 		}
 		if version, err := syncConfig(ctx, cfg, client, state, appliedVersion); err != nil {
 			log.Printf("config sync failed: %v", err)
@@ -481,6 +498,26 @@ func runReload(ctx context.Context, command string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// removeV2RayUser calls "v2ray api rmui" to dynamically remove a user from the
+// running V2Ray instance without reloading the config file.
+// This provides immediate effect; the config rebuild (already triggered by the control
+// plane) ensures the user is excluded from the next persisted config as well.
+func removeV2RayUser(cfg config.NodeAgentConfig, email string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx,
+		"v2ray", "api", "rmui",
+		"--server="+cfg.UsageQueryServer,
+		"-inboundTag=vmess-inbound",
+		"-email="+email,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // selfMD5 computes the MD5 hex digest of the running binary.

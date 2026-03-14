@@ -1171,6 +1171,50 @@ func (s *PostgresStore) RebuildNodeConfig(nodeID string) (*domain.ConfigRevision
 	return rev, nil
 }
 
+func (s *PostgresStore) AddPendingUserRemovals(removals []domain.PendingUserRemoval) error {
+	if len(removals) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return mapPQError(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, r := range removals {
+		_, err := tx.Exec(
+			`INSERT INTO pending_user_removals (node_id, member_uuid, member_email)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT DO NOTHING`,
+			r.NodeID, r.MemberUUID, r.MemberEmail,
+		)
+		if err != nil {
+			return mapPQError(err)
+		}
+	}
+	return mapPQError(tx.Commit())
+}
+
+func (s *PostgresStore) GetAndClearPendingRemovals(nodeID string) ([]domain.PendingUserRemoval, error) {
+	rows, err := s.db.Query(
+		`DELETE FROM pending_user_removals WHERE node_id = $1
+		 RETURNING id, node_id, member_uuid, member_email, created_at`,
+		nodeID,
+	)
+	if err != nil {
+		return nil, mapPQError(err)
+	}
+	defer rows.Close()
+	var out []domain.PendingUserRemoval
+	for rows.Next() {
+		var r domain.PendingUserRemoval
+		if err := rows.Scan(&r.ID, &r.NodeID, &r.MemberUUID, &r.MemberEmail, &r.CreatedAt); err != nil {
+			return nil, mapPQError(err)
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 func (s *PostgresStore) RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error {
 	var actor any
 	if actorAdminID != "" {

@@ -167,6 +167,18 @@ type AuditLog struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// PendingUserRemoval instructs the node-agent to immediately remove a user from the
+// running V2Ray instance via the gRPC API (v2ray api rmui), without waiting for a
+// config file reload. The control plane also triggers a config rebuild so the user
+// is excluded from the next persisted config.
+type PendingUserRemoval struct {
+	ID          string    `json:"id"`
+	NodeID      string    `json:"node_id"`
+	MemberUUID  string    `json:"member_uuid"`
+	MemberEmail string    `json:"member_email"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type UsageSnapshot struct {
 	CredentialUUID string    `json:"credential_uuid"`
 	UplinkBytes    int64     `json:"uplink_bytes"`
