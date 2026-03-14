@@ -1004,7 +1004,7 @@ func (s *PostgresStore) RecordUsage(nodeToken string, snapshots []domain.UsageSn
 
 func (s *PostgresStore) ListNodes() []domain.Node {
 	rows, err := s.db.Query(
-		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
+		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
 		 FROM nodes
 		 ORDER BY created_at ASC`,
 	)
@@ -1020,6 +1020,11 @@ func (s *PostgresStore) ListNodes() []domain.Node {
 		}
 	}
 	return out
+}
+
+func (s *PostgresStore) DeleteNode(nodeID string) error {
+	_, err := s.db.Exec(`DELETE FROM nodes WHERE id = $1`, nodeID)
+	return err
 }
 
 func (s *PostgresStore) ListMembers() []domain.Member {
@@ -1221,7 +1226,7 @@ func pageParams(page, limit int) (offset, lim int) {
 func (s *PostgresStore) findNodeByToken(nodeToken string) (*domain.Node, error) {
 	var node *domain.Node
 	err := withRetryableRow(s.db.QueryRow(
-		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
+		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
 		 FROM nodes
 		 WHERE node_token_hash = $1`,
 		sha256Hex(strings.TrimSpace(nodeToken)),
@@ -1242,7 +1247,7 @@ func (s *PostgresStore) findNodeByToken(nodeToken string) (*domain.Node, error) 
 func (s *PostgresStore) getNodeByIDTx(tx *sql.Tx, nodeID string) (*domain.Node, error) {
 	var node *domain.Node
 	err := withRetryableRow(tx.QueryRow(
-		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
+		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
 		 FROM nodes
 		 WHERE id = $1`,
 		nodeID,
@@ -1445,6 +1450,7 @@ func scanNode(row scanner) (*domain.Node, error) {
 	var node domain.Node
 	var rawTags string
 	var heartbeat sql.NullTime
+	var proxyNodeID sql.NullString
 	if err := row.Scan(
 		&node.ID,
 		&node.Name,
@@ -1453,6 +1459,7 @@ func scanNode(row scanner) (*domain.Node, error) {
 		&node.Provider,
 		&rawTags,
 		&node.RuntimeFlavor,
+		&proxyNodeID,
 		&node.Status,
 		&heartbeat,
 		&node.CurrentConfigVersion,
@@ -1464,6 +1471,9 @@ func scanNode(row scanner) (*domain.Node, error) {
 	}
 	if heartbeat.Valid {
 		node.LastHeartbeatAt = heartbeat.Time
+	}
+	if proxyNodeID.Valid {
+		node.ProxyNodeID = proxyNodeID.String
 	}
 	if rawTags != "" {
 		if err := json.Unmarshal([]byte(rawTags), &node.Tags); err != nil {
@@ -1731,4 +1741,14 @@ ConfigVersion: nextVersion,
 Config:        configText,
 UpdatedAt:     now,
 }, nil
+}
+
+func (s *PostgresStore) SetNodeProxy(nodeID, proxyNodeID string) error {
+var err error
+if proxyNodeID == "" {
+_, err = s.db.Exec(`UPDATE nodes SET proxy_node_id = NULL, updated_at = NOW() WHERE id = $1`, nodeID)
+} else {
+_, err = s.db.Exec(`UPDATE nodes SET proxy_node_id = $2, updated_at = NOW() WHERE id = $1`, nodeID, proxyNodeID)
+}
+return mapPQError(err)
 }

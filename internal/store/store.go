@@ -63,6 +63,7 @@ type Store interface {
 	DeleteNodeGroup(groupID string) error
 	ListNodeGroups() []domain.NodeGroup
 	SetNodeGroupsForNode(nodeID string, groupIDs []string) error
+	SetNodeProxy(nodeID, proxyNodeID string) error
 	ListNodeGroupMemberships() []domain.NodeGroupMembership
 	CreateGroupGrant(groupID, memberID string) error
 	DeleteGroupGrant(groupID, memberID string) error
@@ -72,6 +73,7 @@ type Store interface {
 	DeleteMember(memberID string) error
 	RecordUsage(nodeToken string, snapshots []domain.UsageSnapshot) error
 	ListNodes() []domain.Node
+	DeleteNode(nodeID string) error
 	ListMembers() []domain.Member
 	ListGrants() []domain.GrantView
 	ListNodeSyncEvents(nodeID string, page, limit int) ([]domain.NodeSyncEvent, int64, error)

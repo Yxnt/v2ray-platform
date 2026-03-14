@@ -802,6 +802,13 @@ func (s *MemoryStore) ListNodes() []domain.Node {
 	return out
 }
 
+func (s *MemoryStore) DeleteNode(nodeID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.nodes, nodeID)
+	return nil
+}
+
 func (s *MemoryStore) ListMembers() []domain.Member {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1192,4 +1199,15 @@ return []domain.ConfigRevision{r}, nil
 
 func (s *MemoryStore) RollbackNodeConfig(_ string, _ int64) (*domain.ConfigRevision, error) {
 return nil, ErrNotFound
+}
+
+func (s *MemoryStore) SetNodeProxy(nodeID, proxyNodeID string) error {
+s.mu.Lock()
+defer s.mu.Unlock()
+node, ok := s.nodes[nodeID]
+if !ok {
+return ErrNotFound
+}
+node.ProxyNodeID = proxyNodeID
+return nil
 }

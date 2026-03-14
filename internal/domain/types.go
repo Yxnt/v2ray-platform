@@ -26,6 +26,7 @@ type Node struct {
 	Provider             string     `json:"provider"`
 	Tags                 []string   `json:"tags"`
 	RuntimeFlavor        string     `json:"runtime_flavor"`
+	ProxyNodeID          string     `json:"proxy_node_id,omitempty"`
 	Status               NodeStatus `json:"status"`
 	LastHeartbeatAt      time.Time  `json:"last_heartbeat_at"`
 	CurrentConfigVersion int64      `json:"current_config_version"`

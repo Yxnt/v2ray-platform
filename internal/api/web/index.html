@@ -298,6 +298,10 @@
         <option value="">— No tier —</option>
       </select>
     </div>
+    <div class="field">
+      <label>Quota override (GB, 0 = unlimited) <span style="color:var(--text-muted);font-size:12px">overrides tier quota if set</span></label>
+      <input id="edit-member-quota-gb" type="number" min="0" placeholder="0">
+    </div>
     <div class="edit-modal-actions">
       <button class="btn btn-secondary" id="edit-member-cancel">Cancel</button>
       <button class="btn btn-primary" id="edit-member-save">Save</button>
@@ -461,6 +465,8 @@
       <button id="batch-rebuild-nodes-btn" class="btn btn-secondary btn-sm">↺ Rebuild selected</button>
       <select id="assign-group-select" multiple size="3" title="Hold Ctrl/⌘ to select multiple groups. Nothing selected = clear all groups."></select>
       <button id="assign-group-btn" class="btn btn-secondary btn-sm" title="Replaces the selected nodes' group assignments with the chosen groups">Set groups</button>
+      <select id="set-proxy-select" title="Front-end relay proxy. '— none —' clears the proxy."></select>
+      <button id="set-proxy-btn" class="btn btn-secondary btn-sm" title="Set a relay proxy for selected nodes (Clash dialer-proxy)">Set proxy</button>
       <button id="export-nodes-btn" class="btn btn-secondary btn-sm">↓ Export CSV</button>
     </div>
     <div class="table-wrap">
@@ -468,7 +474,7 @@
         <thead>
           <tr>
             <th class="checkbox-cell"><input type="checkbox" data-select-all="node"></th>
-            <th>Name</th><th>Status</th><th>Region</th><th>Host</th><th>Tags</th><th>Groups</th><th>Config</th><th></th>
+            <th>Name</th><th>Status</th><th>Region</th><th>Host</th><th>Tags</th><th>Groups</th><th>Proxy</th><th>Config</th><th></th>
           </tr>
         </thead>
         <tbody id="nodes-body"></tbody>
@@ -808,6 +814,7 @@
       groupGrantGroup: document.querySelector('#group-grant-group'),
       groupGrantMember: document.querySelector('#group-grant-member'),
       assignGroupSelect: document.querySelector('#assign-group-select'),
+      setProxySelect: document.querySelector('#set-proxy-select'),
     };
 
     let refreshTimer = 0;
@@ -1020,11 +1027,19 @@
         groupNamesByNode[membership.node_id].push(membership.group_name);
         groupIDsByNode[membership.node_id].push(membership.group_id);
       }
+      const nodeByID = {};
+      for (const node of nodes.items) nodeByID[node.id] = node;
+
+      // Populate proxy select dropdown
+      els.setProxySelect.innerHTML = '<option value="">— none —</option>' +
+        nodes.items.map(n => `<option value="${n.id}">${n.name}${n.region ? ' (' + n.region + ')' : ''}</option>`).join('');
+
       els.nodesBody.innerHTML = '';
       for (const node of nodes.items) {
         const statusBadge = `<span class="badge badge-${node.status || 'offline'}">${node.status || 'unknown'}</span>`;
         const row = document.createElement('tr');
-        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-node-select="${node.id}"></td><td><strong>${node.name}</strong></td><td>${statusBadge}</td><td>${node.region}</td><td style="color:var(--text-dim)">${node.public_host || '—'}</td><td style="color:var(--text-dim)">${(node.tags || []).join(', ') || '—'}</td><td style="color:var(--text-dim)">${(groupNamesByNode[node.id] || []).join(', ') || '—'}</td><td style="color:var(--text-muted)">${node.current_config_version}</td><td><button class="btn btn-secondary btn-xs" data-node-rebuild="${node.id}">↺ Rebuild</button> <button class="btn btn-secondary btn-xs" data-node-config="${node.id}" data-node-name="${encodeURIComponent(node.name)}">Config</button></td>`;
+        const proxyName = node.proxy_node_id ? (nodeByID[node.proxy_node_id]?.name || node.proxy_node_id) : '—';
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-node-select="${node.id}"></td><td><strong>${node.name}</strong></td><td>${statusBadge}</td><td>${node.region}</td><td style="color:var(--text-dim)">${node.public_host || '—'}</td><td style="color:var(--text-dim)">${(node.tags || []).join(', ') || '—'}</td><td style="color:var(--text-dim)">${(groupNamesByNode[node.id] || []).join(', ') || '—'}</td><td style="color:var(--text-dim)">${proxyName}</td><td style="color:var(--text-muted)">${node.current_config_version}</td><td><button class="btn btn-secondary btn-xs" data-node-rebuild="${node.id}">↺ Rebuild</button> <button class="btn btn-secondary btn-xs" data-node-config="${node.id}" data-node-name="${encodeURIComponent(node.name)}">Config</button> <button class="btn btn-danger btn-xs" data-node-delete="${node.id}" data-node-name="${encodeURIComponent(node.name)}">✕</button></td>`;
         els.nodesBody.appendChild(row);
       }
 
@@ -1061,7 +1076,7 @@
         const toggleStatus = isSuspended ? 'active' : 'suspended';
         const subToken = member.subscription_token || '';
         const row = document.createElement('tr');
-        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${tierLabel}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}" data-member-tier="${member.tier_id||''}">Edit</button><button class="btn btn-secondary btn-xs" data-member-clash="${member.id}" data-member-name="${encodeURIComponent(member.name)}">Clash↓</button><button class="btn btn-secondary btn-xs" data-member-sub="${subToken}" title="Copy subscription URL">Sub🔗</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${tierLabel}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}" data-member-tier="${member.tier_id||''}" data-member-quota="${member.quota_bytes_limit||0}">Edit</button><button class="btn btn-secondary btn-xs" data-member-clash="${member.id}" data-member-name="${encodeURIComponent(member.name)}">Clash↓</button><button class="btn btn-secondary btn-xs" data-member-sub="${subToken}" title="Copy subscription URL">Sub🔗</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
         els.membersBody.appendChild(row);
       }
 
@@ -1392,6 +1407,24 @@
       }
     });
 
+    document.querySelector('#set-proxy-btn').addEventListener('click', async () => {
+      const nodeIDs = selectedValues('data-node-select');
+      if (nodeIDs.length === 0) {
+        alert('Select at least one node.');
+        return;
+      }
+      const proxyNodeID = els.setProxySelect.value; // empty string = clear
+      try {
+        await Promise.all(nodeIDs.map(nodeID => api(`/api/admin/nodes/${nodeID}/proxy`, {
+          method: 'POST',
+          body: JSON.stringify({ proxy_node_id: proxyNodeID }),
+        })));
+        await refreshDashboard();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
+
     async function downloadExport(path, filename) {
       const headers = new Headers();
       const sessionToken = getSessionToken();
@@ -1474,6 +1507,8 @@
         document.querySelector('#edit-member-note').value  = decodeURIComponent(btn.dataset.memberNote || '');
         document.querySelector('#edit-member-uuid').value  = btn.dataset.memberUuid || '';
         document.querySelector('#edit-member-tier').value  = btn.dataset.memberTier || '';
+        const quotaBytes = parseInt(btn.dataset.memberQuota || '0', 10);
+        document.querySelector('#edit-member-quota-gb').value = quotaBytes > 0 ? (quotaBytes / 1e9).toFixed(2) : '';
         document.querySelector('#edit-member-modal').dataset.editingId = editMemberID;
         document.querySelector('#edit-member-modal').classList.remove('hidden');
         return;
@@ -1559,6 +1594,19 @@
         } finally {
           btn.disabled = false;
           btn.textContent = '↺ Rebuild';
+        }
+      }
+
+      const nodeDeleteID = event.target?.dataset?.nodeDelete;
+      if (nodeDeleteID) {
+        const nodeName = decodeURIComponent(event.target.dataset.nodeName || nodeDeleteID);
+        if (!confirm(`Delete node "${nodeName}"? This cannot be undone.`)) return;
+        try {
+          await api(`/api/admin/nodes/${nodeDeleteID}`, { method: 'DELETE' });
+          await refreshDashboard();
+          toast(`✓ Node "${nodeName}" deleted`, 'success');
+        } catch (error) {
+          toast(error.message, 'error');
         }
       }
 
@@ -1696,12 +1744,14 @@
       const memberID = modal.dataset.editingId;
       if (!memberID) return;
       const tierVal = document.querySelector('#edit-member-tier').value;
+      const quotaGBVal = parseFloat(document.querySelector('#edit-member-quota-gb').value || '0');
       const patch = {
-        name:    document.querySelector('#edit-member-name').value.trim() || undefined,
-        email:   document.querySelector('#edit-member-email').value.trim() || undefined,
-        note:    document.querySelector('#edit-member-note').value.trim(),
-        uuid:    document.querySelector('#edit-member-uuid').value.trim() || undefined,
-        tier_id: tierVal !== undefined ? tierVal : undefined,
+        name:              document.querySelector('#edit-member-name').value.trim() || undefined,
+        email:             document.querySelector('#edit-member-email').value.trim() || undefined,
+        note:              document.querySelector('#edit-member-note').value.trim(),
+        uuid:              document.querySelector('#edit-member-uuid').value.trim() || undefined,
+        tier_id:           tierVal !== undefined ? tierVal : undefined,
+        quota_bytes_limit: Math.round(quotaGBVal * 1e9),
       };
       // Remove undefined keys
       Object.keys(patch).forEach(k => patch[k] === undefined && delete patch[k]);

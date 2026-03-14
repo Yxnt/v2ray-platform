@@ -121,7 +121,9 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Han
 	mux.HandleFunc("PATCH /api/admin/node-groups/{groupID}", withAdmin(cfg, svc.sessions, svc.handleUpdateNodeGroup))
 	mux.HandleFunc("DELETE /api/admin/node-groups/{groupID}", withAdmin(cfg, svc.sessions, svc.handleDeleteNodeGroup))
 	mux.HandleFunc("GET /api/admin/node-group-memberships", withAdmin(cfg, svc.sessions, svc.handleListNodeGroupMemberships))
+	mux.HandleFunc("POST /api/admin/nodes/{nodeID}/proxy", withAdmin(cfg, svc.sessions, svc.handleSetNodeProxy))
 	mux.HandleFunc("POST /api/admin/nodes/{nodeID}/groups", withAdmin(cfg, svc.sessions, svc.handleSetNodeGroups))
+	mux.HandleFunc("DELETE /api/admin/nodes/{nodeID}", withAdmin(cfg, svc.sessions, svc.handleDeleteNode))
 	mux.HandleFunc("GET /api/admin/node-group-grants", withAdmin(cfg, svc.sessions, svc.handleListGroupGrants))
 	mux.HandleFunc("POST /api/admin/node-groups/{groupID}/grants", withAdmin(cfg, svc.sessions, svc.handleCreateGroupGrant))
 	mux.HandleFunc("DELETE /api/admin/node-groups/{groupID}/grants/{memberID}", withAdmin(cfg, svc.sessions, svc.handleDeleteGroupGrant))
@@ -532,30 +534,55 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member) []by
 		Path string
 	}
 	type proxy struct {
-		Name    string
-		Server  string
-		Port    int
-		UUID    string
-		WsPath  string
+		Name        string
+		Server      string
+		Port        int
+		UUID        string
+		WsPath      string
+		DialerProxy string // name of the relay proxy, empty = direct
+	}
+
+	// Build a name lookup for all nodes (needed for dialer-proxy resolution).
+	allNodes := svc.store.ListNodes()
+	nodeByID := make(map[string]*domain.Node, len(allNodes))
+	for i := range allNodes {
+		nodeByID[allNodes[i].ID] = &allNodes[i]
+	}
+
+	// Auto-include any proxy nodes referenced by accessible nodes.
+	for id := range nodeIDs {
+		if n, ok := nodeByID[id]; ok && n.ProxyNodeID != "" {
+			nodeIDs[n.ProxyNodeID] = struct{}{}
+		}
+	}
+
+	nodeName := func(n *domain.Node) string {
+		if n.Region != "" {
+			return n.Region + " - " + n.Name
+		}
+		return n.Name
 	}
 
 	var proxies []proxy
 	var proxyNames []string
-	for _, node := range svc.store.ListNodes() {
+	for _, node := range allNodes {
 		if _, ok := nodeIDs[node.ID]; !ok {
 			continue
 		}
-		name := node.Name
-		if node.Region != "" {
-			name = node.Region + " - " + node.Name
-		}
-		proxies = append(proxies, proxy{
+		name := nodeName(&node)
+		p := proxy{
 			Name:   name,
 			Server: node.PublicHost,
 			Port:   80,
 			UUID:   member.UUID,
 			WsPath: "/" + node.Name,
-		})
+		}
+		if node.ProxyNodeID != "" {
+			if relay, ok := nodeByID[node.ProxyNodeID]; ok {
+				p.DialerProxy = nodeName(relay)
+			}
+		}
+		proxies = append(proxies, p)
 		proxyNames = append(proxyNames, name)
 	}
 
@@ -589,6 +616,9 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member) []by
 		buf.WriteString("    network: ws\n")
 		buf.WriteString("    ws-opts:\n")
 		fmt.Fprintf(&buf, "      path: %q\n", p.WsPath)
+		if p.DialerProxy != "" {
+			fmt.Fprintf(&buf, "    dialer-proxy: %q\n", p.DialerProxy)
+		}
 		buf.WriteString("\n")
 	}
 
@@ -687,7 +717,10 @@ func (svc *ControlPlaneService) handlePublicClashSubscription(w http.ResponseWri
 		break
 	}
 
-	userinfo := fmt.Sprintf("upload=%d; download=%d; total=%d", upload, download, totalQuota)
+	userinfo := fmt.Sprintf("upload=%d; download=%d", upload, download)
+	if totalQuota > 0 {
+		userinfo += fmt.Sprintf("; total=%d", totalQuota)
+	}
 	if member.ExpiresAt != nil {
 		userinfo += fmt.Sprintf("; expire=%d", member.ExpiresAt.Unix())
 	}
@@ -823,9 +856,36 @@ func (svc *ControlPlaneService) handleDeleteNodeGroup(w http.ResponseWriter, r *
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (svc *ControlPlaneService) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeID")
+	if err := svc.store.DeleteNode(nodeID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "node.deleted", "node", nodeID, nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (svc *ControlPlaneService) handleListNodeGroupMemberships(w http.ResponseWriter, r *http.Request) {
 	items := svc.store.ListNodeGroupMemberships()
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+func (svc *ControlPlaneService) handleSetNodeProxy(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nodeID")
+	var req struct {
+		ProxyNodeID string `json:"proxy_node_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := svc.store.SetNodeProxy(nodeID, req.ProxyNodeID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "node.proxy_set", "node", nodeID, map[string]any{"proxy_node_id": req.ProxyNodeID})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (svc *ControlPlaneService) handleSetNodeGroups(w http.ResponseWriter, r *http.Request) {
