@@ -1064,28 +1064,44 @@ func (s *PostgresStore) ListGrants() []domain.GrantView {
 	return out
 }
 
-func (s *PostgresStore) ListNodeSyncEvents(nodeID string) []domain.NodeSyncEvent {
-	query := `SELECT id, node_id, config_version, success, message, occurred_at
-	          FROM node_sync_events`
-	args := []any{}
+func (s *PostgresStore) ListNodeSyncEvents(nodeID string, page, limit int) ([]domain.NodeSyncEvent, int64, error) {
+	offset, lim := pageParams(page, limit)
+	var countQuery, dataQuery string
+	var args []any
 	if nodeID != "" {
-		query += ` WHERE node_id = $1`
-		args = append(args, nodeID)
+		countQuery = `SELECT COUNT(*) FROM node_sync_events WHERE node_id = $1`
+		dataQuery = `SELECT id, node_id, config_version, success, message, occurred_at
+		             FROM node_sync_events WHERE node_id = $1
+		             ORDER BY occurred_at DESC LIMIT $2 OFFSET $3`
+		args = []any{nodeID}
+	} else {
+		countQuery = `SELECT COUNT(*) FROM node_sync_events`
+		dataQuery = `SELECT id, node_id, config_version, success, message, occurred_at
+		             FROM node_sync_events
+		             ORDER BY occurred_at DESC LIMIT $1 OFFSET $2`
 	}
-	query += ` ORDER BY occurred_at DESC`
-	rows, err := s.db.Query(query, args...)
+	var total int64
+	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, mapPQError(err)
+	}
+	if nodeID != "" {
+		args = append(args, lim, offset)
+	} else {
+		args = []any{lim, offset}
+	}
+	rows, err := s.db.Query(dataQuery, args...)
 	if err != nil {
-		return []domain.NodeSyncEvent{}
+		return nil, 0, mapPQError(err)
 	}
 	defer rows.Close()
 	out := make([]domain.NodeSyncEvent, 0)
 	for rows.Next() {
-		var event domain.NodeSyncEvent
-		if err := rows.Scan(&event.ID, &event.NodeID, &event.ConfigVersion, &event.Success, &event.Message, &event.OccurredAt); err == nil {
-			out = append(out, event)
+		var ev domain.NodeSyncEvent
+		if err := rows.Scan(&ev.ID, &ev.NodeID, &ev.ConfigVersion, &ev.Success, &ev.Message, &ev.OccurredAt); err == nil {
+			out = append(out, ev)
 		}
 	}
-	return out
+	return out, total, nil
 }
 
 func (s *PostgresStore) ListNodeUsageSummaries() []domain.NodeUsageSummary {
@@ -1163,15 +1179,21 @@ func (s *PostgresStore) RecordAuditLog(actorAdminID, action, targetType, targetI
 	return mapPQError(err)
 }
 
-func (s *PostgresStore) ListAuditLogs() []domain.AuditLog {
+func (s *PostgresStore) ListAuditLogs(page, limit int) ([]domain.AuditLog, int64, error) {
+	offset, lim := pageParams(page, limit)
+	var total int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM audit_logs`).Scan(&total); err != nil {
+		return nil, 0, mapPQError(err)
+	}
 	rows, err := s.db.Query(
 		`SELECT id, COALESCE(actor_admin_id, ''), action, target_type, target_id, payload::text, created_at
 		 FROM audit_logs
 		 ORDER BY created_at DESC, id DESC
-		 LIMIT 200`,
+		 LIMIT $1 OFFSET $2`,
+		lim, offset,
 	)
 	if err != nil {
-		return []domain.AuditLog{}
+		return nil, 0, mapPQError(err)
 	}
 	defer rows.Close()
 	out := make([]domain.AuditLog, 0)
@@ -1181,7 +1203,19 @@ func (s *PostgresStore) ListAuditLogs() []domain.AuditLog {
 			out = append(out, log)
 		}
 	}
-	return out
+	return out, total, nil
+}
+
+// pageParams normalises page (1-based) and limit into SQL OFFSET and LIMIT.
+// limit <= 0 means "no limit" (uses 100 000 as a safe cap for exports).
+func pageParams(page, limit int) (offset, lim int) {
+	if limit <= 0 {
+		limit = 100_000
+	}
+	if page < 1 {
+		page = 1
+	}
+	return (page - 1) * limit, limit
 }
 
 func (s *PostgresStore) findNodeByToken(nodeToken string) (*domain.Node, error) {

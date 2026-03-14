@@ -113,7 +113,8 @@ func TestRevokeGrantAndDeleteMemberLifecycle(t *testing.T) {
 	if len(s.ListMembers()) != 0 {
 		t.Fatal("expected no members after delete")
 	}
-	if len(s.ListAuditLogs()) != 1 {
+	logs, _, _ := s.ListAuditLogs(1, 50)
+	if len(logs) != 1 {
 		t.Fatal("expected one audit log")
 	}
 }

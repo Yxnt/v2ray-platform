@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1000,7 +1001,7 @@ func (svc *ControlPlaneService) handleGetNodeConfig(w http.ResponseWriter, r *ht
 		return
 	}
 	// Also fetch last sync event to show applied status
-	events := svc.store.ListNodeSyncEvents(nodeID)
+	events, _, _ := svc.store.ListNodeSyncEvents(nodeID, 1, 1)
 	var lastSync *domain.NodeSyncEvent
 	if len(events) > 0 {
 		lastSync = &events[0]
@@ -1093,7 +1094,7 @@ func (svc *ControlPlaneService) handleExportResource(w http.ResponseWriter, r *h
 		}
 		filename = "grants"
 	case "audit-logs":
-		items := svc.store.ListAuditLogs()
+		items, _, _ := svc.store.ListAuditLogs(1, 0) // limit=0 → all records
 		payload = map[string]any{"items": items}
 		rows = append(rows, []string{"id", "actor_admin_id", "action", "target_type", "target_id", "payload", "created_at"})
 		for _, item := range items {
@@ -1124,13 +1125,46 @@ func (svc *ControlPlaneService) handleExportResource(w http.ResponseWriter, r *h
 }
 
 func (svc *ControlPlaneService) handleListSyncEvents(w http.ResponseWriter, r *http.Request) {
+	page, limit := parsePage(r)
+	items, total, err := svc.store.ListNodeSyncEvents(r.URL.Query().Get("node_id"), page, limit)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": svc.store.ListNodeSyncEvents(r.URL.Query().Get("node_id")),
+		"items": items,
+		"total": total,
+		"page":  page,
+		"limit": limit,
 	})
 }
 
 func (svc *ControlPlaneService) handleListAuditLogs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": svc.store.ListAuditLogs()})
+	page, limit := parsePage(r)
+	items, total, err := svc.store.ListAuditLogs(page, limit)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"total": total,
+		"page":  page,
+		"limit": limit,
+	})
+}
+
+// parsePage reads ?page= and ?limit= from the request, applying sane defaults.
+func parsePage(r *http.Request) (page, limit int) {
+	page, _ = strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 200 {
+		limit = 50
+	}
+	return
 }
 
 // ── Tier handlers ─────────────────────────────────────────────────────────────

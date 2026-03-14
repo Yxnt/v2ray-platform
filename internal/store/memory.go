@@ -845,20 +845,29 @@ func (s *MemoryStore) ListGrants() []domain.GrantView {
 	return out
 }
 
-func (s *MemoryStore) ListNodeSyncEvents(nodeID string) []domain.NodeSyncEvent {
+func (s *MemoryStore) ListNodeSyncEvents(nodeID string, page, limit int) ([]domain.NodeSyncEvent, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var out []domain.NodeSyncEvent
+	var all []domain.NodeSyncEvent
 	for _, event := range s.syncEvents {
 		if nodeID == "" || event.NodeID == nodeID {
-			out = append(out, *event)
+			all = append(all, *event)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].OccurredAt.After(out[j].OccurredAt)
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].OccurredAt.After(all[j].OccurredAt)
 	})
-	return out
+	total := int64(len(all))
+	offset, lim := pageParams(page, limit)
+	if offset >= len(all) {
+		return []domain.NodeSyncEvent{}, total, nil
+	}
+	end := offset + lim
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], total, nil
 }
 
 func (s *MemoryStore) ListNodeUsageSummaries() []domain.NodeUsageSummary {
@@ -970,18 +979,27 @@ func (s *MemoryStore) RecordAuditLog(actorAdminID, action, targetType, targetID 
 	return nil
 }
 
-func (s *MemoryStore) ListAuditLogs() []domain.AuditLog {
+func (s *MemoryStore) ListAuditLogs(page, limit int) ([]domain.AuditLog, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	out := make([]domain.AuditLog, 0, len(s.auditLogs))
+	all := make([]domain.AuditLog, 0, len(s.auditLogs))
 	for _, log := range s.auditLogs {
-		out = append(out, *log)
+		all = append(all, *log)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].CreatedAt.After(out[j].CreatedAt)
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].CreatedAt.After(all[j].CreatedAt)
 	})
-	return out
+	total := int64(len(all))
+	offset, lim := pageParams(page, limit)
+	if offset >= len(all) {
+		return []domain.AuditLog{}, total, nil
+	}
+	end := offset + lim
+	if end > len(all) {
+		end = len(all)
+	}
+	return all[offset:end], total, nil
 }
 
 func (s *MemoryStore) rebuildNodeConfigLocked(nodeID string) (*domain.ConfigRevision, error) {

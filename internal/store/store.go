@@ -74,7 +74,7 @@ type Store interface {
 	ListNodes() []domain.Node
 	ListMembers() []domain.Member
 	ListGrants() []domain.GrantView
-	ListNodeSyncEvents(nodeID string) []domain.NodeSyncEvent
+	ListNodeSyncEvents(nodeID string, page, limit int) ([]domain.NodeSyncEvent, int64, error)
 	ListNodeUsageSummaries() []domain.NodeUsageSummary
 	ListMemberUsageSummaries() []domain.MemberUsageSummary
 	GetMemberUsageSince(memberID string, since time.Time) int64
@@ -83,6 +83,6 @@ type Store interface {
 	ListNodeConfigRevisions(nodeID string) ([]domain.ConfigRevision, error)
 	RollbackNodeConfig(nodeID string, version int64) (*domain.ConfigRevision, error)
 	RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error
-	ListAuditLogs() []domain.AuditLog
+	ListAuditLogs(page, limit int) ([]domain.AuditLog, int64, error)
 	Close() error
 }

@@ -230,7 +230,8 @@ func (m *Monitor) buildAlerts(now time.Time) []domain.Alert {
 	}
 
 	latestSync := map[string]domain.NodeSyncEvent{}
-	for _, event := range m.store.ListNodeSyncEvents("") {
+	syncEvts, _, _ := m.store.ListNodeSyncEvents("", 1, 500)
+	for _, event := range syncEvts {
 		if _, ok := latestSync[event.NodeID]; ok {
 			continue
 		}

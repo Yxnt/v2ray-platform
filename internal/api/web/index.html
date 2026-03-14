@@ -731,7 +731,7 @@
     </div>
 
     <div class="sub-hd">Sync events</div>
-    <div class="table-wrap" style="margin-bottom:24px">
+    <div class="table-wrap" style="margin-bottom:8px">
       <table>
         <thead>
           <tr><th>Node</th><th>Version</th><th>Success</th><th>Message</th><th>At</th></tr>
@@ -739,12 +739,13 @@
         <tbody id="sync-events-body"></tbody>
       </table>
     </div>
+    <div id="sync-events-pager" style="display:flex;align-items:center;gap:8px;margin-bottom:20px;font-size:12px;color:var(--text-dim)"></div>
 
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div class="sub-hd" style="margin:0">Audit logs</div>
       <button id="export-audit-logs-btn" class="btn btn-secondary btn-sm">↓ Export CSV</button>
     </div>
-    <div class="table-wrap">
+    <div class="table-wrap" style="margin-bottom:8px">
       <table>
         <thead>
           <tr><th>Action</th><th>Target</th><th>Actor</th><th>At</th><th>Payload</th></tr>
@@ -752,6 +753,7 @@
         <tbody id="audit-logs-body"></tbody>
       </table>
     </div>
+    <div id="audit-logs-pager" style="display:flex;align-items:center;gap:8px;margin-bottom:20px;font-size:12px;color:var(--text-dim)"></div>
   </section>
 
   <!-- ════════════════ SETTINGS ════════════════ -->
@@ -794,8 +796,10 @@
       grantsBody: document.querySelector('#grants-body'),
       groupGrantsBody: document.querySelector('#group-grants-body'),
       syncEventsBody: document.querySelector('#sync-events-body'),
+      syncEventsPager: document.querySelector('#sync-events-pager'),
       alertsBody: document.querySelector('#alerts-body'),
       auditLogsBody: document.querySelector('#audit-logs-body'),
+      auditLogsPager: document.querySelector('#audit-logs-pager'),
       nodeUsageBody: document.querySelector('#node-usage-body'),
       memberUsageBody: document.querySelector('#member-usage-body'),
       tiersBody: document.querySelector('#tiers-body'),
@@ -890,6 +894,33 @@
         .map(input => input.getAttribute(attributeName));
     }
 
+    function renderPager(container, total, page, limit, onPage) {
+      container.innerHTML = '';
+      if (!total) return;
+      const totalPages = Math.ceil(total / limit);
+      const start = (page - 1) * limit + 1;
+      const end = Math.min(page * limit, total);
+      const info = document.createElement('span');
+      info.textContent = `${start}–${end} of ${total}`;
+      container.appendChild(info);
+      const prev = document.createElement('button');
+      prev.textContent = '‹ Prev';
+      prev.className = 'btn btn-secondary btn-xs';
+      prev.disabled = page <= 1;
+      prev.addEventListener('click', () => onPage(page - 1));
+      container.appendChild(prev);
+      const next = document.createElement('button');
+      next.textContent = 'Next ›';
+      next.className = 'btn btn-secondary btn-xs';
+      next.disabled = page >= totalPages;
+      next.addEventListener('click', () => onPage(page + 1));
+      container.appendChild(next);
+      const pageInfo = document.createElement('span');
+      pageInfo.textContent = `Page ${page} / ${totalPages}`;
+      pageInfo.style.color = 'var(--text-muted)';
+      container.appendChild(pageInfo);
+    }
+
     function scheduleRefresh() {
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
@@ -921,6 +952,9 @@
     }
 
     let groupIDsByNode = {};
+    let syncEventsPage = 1;
+    let auditLogsPage = 1;
+    const PAGE_LIMIT = 50;
 
     async function refreshDashboard() {
       await refreshSession();
@@ -960,12 +994,12 @@
         apiOrEmpty('/api/admin/node-groups'),
         apiOrEmpty('/api/admin/node-group-memberships'),
         apiOrEmpty('/api/admin/alerts'),
-        apiOrEmpty('/api/admin/audit-logs'),
+        apiOrEmpty('/api/admin/audit-logs' + `?page=${auditLogsPage}&limit=${PAGE_LIMIT}`),
         apiOrEmpty('/api/admin/usage/nodes'),
         apiOrEmpty('/api/admin/usage/members'),
         apiOrEmpty(nodeListURL),
         apiOrEmpty(memberListURL),
-        apiOrEmpty('/api/admin/sync-events'),
+        apiOrEmpty('/api/admin/sync-events' + `?page=${syncEventsPage}&limit=${PAGE_LIMIT}`),
         apiOrEmpty('/api/admin/nodes'),
         apiOrEmpty('/api/admin/members'),
         apiOrEmpty('/api/admin/tiers'),
@@ -1052,6 +1086,7 @@
         row.innerHTML = `<td style="color:var(--text-dim)">${event.node_id}</td><td>${event.config_version}</td><td>${successBadge}</td><td style="color:var(--text-muted)">${event.message}</td><td style="color:var(--text-muted)">${new Date(event.occurred_at).toLocaleString()}</td>`;
         els.syncEventsBody.appendChild(row);
       }
+      renderPager(els.syncEventsPager, syncEvents.total, syncEventsPage, PAGE_LIMIT, p => { syncEventsPage = p; refreshDashboard(); });
 
       els.auditLogsBody.innerHTML = '';
       for (const log of auditLogs.items) {
@@ -1059,6 +1094,7 @@
         row.innerHTML = `<td><strong>${log.action}</strong></td><td style="color:var(--text-dim)">${log.target_type}:${log.target_id}</td><td style="color:var(--text-muted)">${log.actor_admin_id || '—'}</td><td style="color:var(--text-muted)">${new Date(log.created_at).toLocaleString()}</td><td><code>${log.payload}</code></td>`;
         els.auditLogsBody.appendChild(row);
       }
+      renderPager(els.auditLogsPager, auditLogs.total, auditLogsPage, PAGE_LIMIT, p => { auditLogsPage = p; refreshDashboard(); });
 
       els.alertsBody.innerHTML = '';
       for (const alert of alerts.items) {
