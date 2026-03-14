@@ -621,3 +621,10 @@ If you pause implementation now and come back later, the best next feature order
 7. multi-instance productionization
 
 That order gives the best balance of real operational value, risk reduction, and implementation effort for a small self-operated service.
+
+## Acknowledgements
+
+Special thanks to the AI tools that made building this project faster and more enjoyable:
+
+- **[Anthropic Claude](https://www.anthropic.com/claude)** — for intelligent code generation, architecture guidance, and thoughtful problem-solving throughout the development of this project.
+- **[GitHub Copilot](https://github.com/features/copilot)** — for in-editor assistance, code completion, and the GitHub Copilot CLI agent that helped implement features end-to-end.
