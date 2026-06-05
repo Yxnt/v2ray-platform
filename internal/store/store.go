@@ -116,6 +116,7 @@ type Store interface {
 	DeleteCloudFrontConfig() error
 	UpdateCloudFrontDistribution(distributionID, distributionDomain, distributionMode string) error
 	UpdateCloudFrontBindings(bindingsJSON string) error
+	UpdateCloudFrontOrigins(originsJSON string) error
 	UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput) error
 	Close() error
 }

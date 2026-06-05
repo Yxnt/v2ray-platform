@@ -1096,6 +1096,17 @@ func (s *MemoryStore) UpdateCloudFrontDistribution(distributionID, distributionD
 	return nil
 }
 
+func (s *MemoryStore) UpdateCloudFrontOrigins(originsJSON string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cloudFrontConfig == nil {
+		return ErrNotFound
+	}
+	s.cloudFrontConfig.OriginsJSON = originsJSON
+	s.cloudFrontConfig.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
 func (s *MemoryStore) UpdateCloudFrontBindings(bindingsJSON string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

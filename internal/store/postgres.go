@@ -2047,6 +2047,27 @@ func (s *PostgresStore) UpdateCloudFrontDistribution(distributionID, distributio
 	return nil
 }
 
+func (s *PostgresStore) UpdateCloudFrontOrigins(originsJSON string) error {
+	now := time.Now().UTC()
+	res, err := s.db.Exec(
+		`UPDATE cloudfront_configs
+		 SET origins_json = $1, updated_at = $2
+		 WHERE id = 'cf-global'`,
+		originsJSON, now,
+	)
+	if err != nil {
+		return mapPQError(err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *PostgresStore) UpdateCloudFrontBindings(bindingsJSON string) error {
 	now := time.Now().UTC()
 	res, err := s.db.Exec(
