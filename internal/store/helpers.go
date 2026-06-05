@@ -82,7 +82,6 @@ func firstNonEmpty(value, fallback string) string {
 func cloneNode(node *domain.Node) *domain.Node {
 	copied := *node
 	copied.Tags = append([]string(nil), node.Tags...)
-	copied.RouteKey = node.RouteKey
 	return &copied
 }
 
@@ -91,6 +90,10 @@ func cloneCloudFrontConfig(cfg *domain.CloudFrontConfig) *domain.CloudFrontConfi
 	if cfg.LastSyncedAt != nil {
 		t := *cfg.LastSyncedAt
 		copied.LastSyncedAt = &t
+	}
+	if cfg.LastSuccessfulSyncAt != nil {
+		t := *cfg.LastSuccessfulSyncAt
+		copied.LastSuccessfulSyncAt = &t
 	}
 	return &copied
 }

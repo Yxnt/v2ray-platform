@@ -241,22 +241,26 @@ type Alert struct {
 // CloudFrontConfig stores the platform's single CloudFront deployment configuration.
 // Exactly one row; ID is always "cf-global".
 type CloudFrontConfig struct {
-	ID                     string
-	AccessKeyID            string
-	EncryptedSecretKey     string
-	EncryptedSessionToken  string
-	Region                 string
-	OriginsJSON            string      // JSON array of CloudFrontOrigin objects
-	DistributionID         string
-	DistributionDomain     string
-	DistributionMode       string      // "managed" or "adopted"
-	BindingsJSON           string      // JSON array of CloudFrontBinding objects
-	PlanJSON               string      // JSON array of CloudFrontSyncAction objects
-	LastSyncedAt           *time.Time
-	SyncStatus             string
-	LastSyncError          string
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	ID                       string     `json:"id"`
+	EncryptedAccessKeyID     string     `json:"encryptedAccessKeyId,omitempty"`
+	EncryptedSecretAccessKey string     `json:"encryptedSecretAccessKey,omitempty"`
+	EncryptedSessionToken    string     `json:"encryptedSessionToken,omitempty"`
+	AWSRegion                string     `json:"awsRegion"`
+	Enabled                  bool       `json:"enabled"`
+	CustomEntryHost          string     `json:"customEntryHost,omitempty"`
+	Mode                     string     `json:"mode"` // "managed" or "adopted"
+	DistributionID           string     `json:"distributionId,omitempty"`
+	DistributionDomainName   string     `json:"distributionDomainName,omitempty"`
+	OriginsJSON              string     `json:"originsJson,omitempty"`  // JSON array of CloudFrontOrigin objects
+	BindingsJSON             string     `json:"bindingsJson,omitempty"` // JSON array of CloudFrontBinding objects
+	PlanJSON                 string     `json:"planJson,omitempty"`     // JSON array of CloudFrontSyncAction objects
+	LastSyncedAt             *time.Time `json:"lastSyncedAt,omitempty"`
+	LastSuccessfulSyncAt     *time.Time `json:"lastSuccessfulSyncAt,omitempty"`
+	SyncStatus               string     `json:"syncStatus,omitempty"`
+	DriftStatus              string     `json:"driftStatus,omitempty"`
+	LastSyncError            string     `json:"lastSyncError,omitempty"`
+	CreatedAt                time.Time  `json:"createdAt"`
+	UpdatedAt                time.Time  `json:"updatedAt"`
 }
 
 // CloudFrontOrigin represents a CloudFront custom origin pointing to a node.

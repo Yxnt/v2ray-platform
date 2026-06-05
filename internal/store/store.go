@@ -37,21 +37,22 @@ type UpdateTierInput struct {
 
 // SaveCloudFrontConfigInput holds fields for upserting the global CloudFront config.
 type SaveCloudFrontConfigInput struct {
-	AccessKeyID           string
-	EncryptedSecretKey    string
-	EncryptedSessionToken string
-	Region                string
+	EncryptedAccessKeyID     string
+	EncryptedSecretAccessKey string
+	EncryptedSessionToken    string
+	AWSRegion                string
 }
 
 // UpdateCloudFrontSyncInput stores results of a sync run.
 type UpdateCloudFrontSyncInput struct {
-	DistributionID     string
-	DistributionDomain string
-	DistributionMode   string
-	BindingsJSON       string
-	PlanJSON           string
-	SyncStatus         string
-	LastSyncError      string
+	DistributionID         string
+	DistributionDomainName string
+	Mode                   string
+	BindingsJSON           string
+	PlanJSON               string
+	SyncStatus             string
+	DriftStatus            string
+	LastSyncError          string
 }
 
 type Store interface {

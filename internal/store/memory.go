@@ -1055,33 +1055,33 @@ func (s *MemoryStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) erro
 	now := time.Now().UTC()
 	if s.cloudFrontConfig == nil {
 		s.cloudFrontConfig = &domain.CloudFrontConfig{
-			ID:                    "cf-global",
-			AccessKeyID:           input.AccessKeyID,
-			EncryptedSecretKey:    input.EncryptedSecretKey,
-			EncryptedSessionToken: input.EncryptedSessionToken,
-			Region:                input.Region,
-			CreatedAt:             now,
-			UpdatedAt:             now,
+			ID:                       "cf-global",
+			EncryptedAccessKeyID:     input.EncryptedAccessKeyID,
+			EncryptedSecretAccessKey: input.EncryptedSecretAccessKey,
+			EncryptedSessionToken:    input.EncryptedSessionToken,
+			AWSRegion:                input.AWSRegion,
+			CreatedAt:                now,
+			UpdatedAt:                now,
 		}
 		return nil
 	}
-	s.cloudFrontConfig.AccessKeyID = input.AccessKeyID
-	s.cloudFrontConfig.EncryptedSecretKey = input.EncryptedSecretKey
+	s.cloudFrontConfig.EncryptedAccessKeyID = input.EncryptedAccessKeyID
+	s.cloudFrontConfig.EncryptedSecretAccessKey = input.EncryptedSecretAccessKey
 	s.cloudFrontConfig.EncryptedSessionToken = input.EncryptedSessionToken
-	s.cloudFrontConfig.Region = input.Region
+	s.cloudFrontConfig.AWSRegion = input.AWSRegion
 	s.cloudFrontConfig.UpdatedAt = now
 	return nil
 }
 
-func (s *MemoryStore) UpdateCloudFrontDistribution(distributionID, distributionDomain, distributionMode string) error {
+func (s *MemoryStore) UpdateCloudFrontDistribution(distributionID, distributionDomainName, mode string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.cloudFrontConfig == nil {
 		return ErrNotFound
 	}
 	s.cloudFrontConfig.DistributionID = distributionID
-	s.cloudFrontConfig.DistributionDomain = distributionDomain
-	s.cloudFrontConfig.DistributionMode = distributionMode
+	s.cloudFrontConfig.DistributionDomainName = distributionDomainName
+	s.cloudFrontConfig.Mode = mode
 	s.cloudFrontConfig.UpdatedAt = time.Now().UTC()
 	return nil
 }
@@ -1107,11 +1107,11 @@ func (s *MemoryStore) UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput
 	if input.DistributionID != "" {
 		s.cloudFrontConfig.DistributionID = input.DistributionID
 	}
-	if input.DistributionDomain != "" {
-		s.cloudFrontConfig.DistributionDomain = input.DistributionDomain
+	if input.DistributionDomainName != "" {
+		s.cloudFrontConfig.DistributionDomainName = input.DistributionDomainName
 	}
-	if input.DistributionMode != "" {
-		s.cloudFrontConfig.DistributionMode = input.DistributionMode
+	if input.Mode != "" {
+		s.cloudFrontConfig.Mode = input.Mode
 	}
 	if input.BindingsJSON != "" {
 		s.cloudFrontConfig.BindingsJSON = input.BindingsJSON
@@ -1120,8 +1120,12 @@ func (s *MemoryStore) UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput
 		s.cloudFrontConfig.PlanJSON = input.PlanJSON
 	}
 	s.cloudFrontConfig.SyncStatus = input.SyncStatus
+	s.cloudFrontConfig.DriftStatus = input.DriftStatus
 	s.cloudFrontConfig.LastSyncError = input.LastSyncError
 	s.cloudFrontConfig.LastSyncedAt = &now
+	if input.SyncStatus == "synced" {
+		s.cloudFrontConfig.LastSuccessfulSyncAt = &now
+	}
 	s.cloudFrontConfig.UpdatedAt = now
 	return nil
 }

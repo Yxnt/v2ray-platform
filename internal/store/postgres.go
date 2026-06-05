@@ -1956,17 +1956,24 @@ func (s *PostgresStore) SetNodeProxy(nodeID, proxyNodeID string) error {
 func (s *PostgresStore) GetCloudFrontConfig() (*domain.CloudFrontConfig, error) {
 	var cfg domain.CloudFrontConfig
 	var lastSyncedAt sql.NullTime
+	var lastSuccessfulSyncAt sql.NullTime
 	err := s.db.QueryRow(
-		`SELECT id, access_key_id, encrypted_secret_key, encrypted_session_token, region,
-		        origins_json, distribution_id, distribution_domain, distribution_mode,
-		        bindings_json, plan_json, last_synced_at, sync_status, last_sync_error,
+		`SELECT id, encrypted_access_key_id, encrypted_secret_access_key, encrypted_session_token,
+		        aws_region, enabled, custom_entry_host, mode,
+		        distribution_id, distribution_domain_name,
+		        origins_json, bindings_json, plan_json,
+		        last_synced_at, last_successful_sync_at,
+		        sync_status, drift_status, last_sync_error,
 		        created_at, updated_at
 		 FROM cloudfront_configs WHERE id = 'cf-global'`,
 	).Scan(
-		&cfg.ID, &cfg.AccessKeyID, &cfg.EncryptedSecretKey, &cfg.EncryptedSessionToken,
-		&cfg.Region, &cfg.OriginsJSON, &cfg.DistributionID, &cfg.DistributionDomain,
-		&cfg.DistributionMode, &cfg.BindingsJSON, &cfg.PlanJSON, &lastSyncedAt,
-		&cfg.SyncStatus, &cfg.LastSyncError, &cfg.CreatedAt, &cfg.UpdatedAt,
+		&cfg.ID, &cfg.EncryptedAccessKeyID, &cfg.EncryptedSecretAccessKey, &cfg.EncryptedSessionToken,
+		&cfg.AWSRegion, &cfg.Enabled, &cfg.CustomEntryHost, &cfg.Mode,
+		&cfg.DistributionID, &cfg.DistributionDomainName,
+		&cfg.OriginsJSON, &cfg.BindingsJSON, &cfg.PlanJSON,
+		&lastSyncedAt, &lastSuccessfulSyncAt,
+		&cfg.SyncStatus, &cfg.DriftStatus, &cfg.LastSyncError,
+		&cfg.CreatedAt, &cfg.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -1977,6 +1984,9 @@ func (s *PostgresStore) GetCloudFrontConfig() (*domain.CloudFrontConfig, error) 
 	if lastSyncedAt.Valid {
 		cfg.LastSyncedAt = &lastSyncedAt.Time
 	}
+	if lastSuccessfulSyncAt.Valid {
+		cfg.LastSuccessfulSyncAt = &lastSuccessfulSyncAt.Time
+	}
 	return &cfg, nil
 }
 
@@ -1984,30 +1994,30 @@ func (s *PostgresStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) er
 	now := time.Now().UTC()
 	_, err := s.db.Exec(
 		`INSERT INTO cloudfront_configs
-		 (id, access_key_id, encrypted_secret_key, encrypted_session_token, region,
-		  origins_json, distribution_id, distribution_domain, distribution_mode,
+		 (id, encrypted_access_key_id, encrypted_secret_access_key, encrypted_session_token, aws_region,
+		  origins_json, distribution_id, distribution_domain_name, mode,
 		  bindings_json, plan_json, last_synced_at, sync_status, last_sync_error,
 		  created_at, updated_at)
-		 VALUES ('cf-global', $1, $2, $3, $4, '[]', '', '', '', '[]', '[]', NULL, '', '', $5, $5)
+		 VALUES ('cf-global', $1, $2, $3, $4, '[]', '', '', 'managed', '[]', '[]', NULL, 'idle', '', $5, $5)
 		 ON CONFLICT (id) DO UPDATE SET
-		  access_key_id = EXCLUDED.access_key_id,
-		  encrypted_secret_key = EXCLUDED.encrypted_secret_key,
+		  encrypted_access_key_id = EXCLUDED.encrypted_access_key_id,
+		  encrypted_secret_access_key = EXCLUDED.encrypted_secret_access_key,
 		  encrypted_session_token = EXCLUDED.encrypted_session_token,
-		  region = EXCLUDED.region,
+		  aws_region = EXCLUDED.aws_region,
 		  updated_at = EXCLUDED.updated_at`,
-		input.AccessKeyID, input.EncryptedSecretKey, input.EncryptedSessionToken,
-		input.Region, now,
+		input.EncryptedAccessKeyID, input.EncryptedSecretAccessKey, input.EncryptedSessionToken,
+		input.AWSRegion, now,
 	)
 	return mapPQError(err)
 }
 
-func (s *PostgresStore) UpdateCloudFrontDistribution(distributionID, distributionDomain, distributionMode string) error {
+func (s *PostgresStore) UpdateCloudFrontDistribution(distributionID, distributionDomainName, mode string) error {
 	now := time.Now().UTC()
 	res, err := s.db.Exec(
 		`UPDATE cloudfront_configs
-		 SET distribution_id = $1, distribution_domain = $2, distribution_mode = $3, updated_at = $4
+		 SET distribution_id = $1, distribution_domain_name = $2, mode = $3, updated_at = $4
 		 WHERE id = 'cf-global'`,
-		distributionID, distributionDomain, distributionMode, now,
+		distributionID, distributionDomainName, mode, now,
 	)
 	if err != nil {
 		return mapPQError(err)
@@ -2048,17 +2058,20 @@ func (s *PostgresStore) UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInp
 	res, err := s.db.Exec(
 		`UPDATE cloudfront_configs
 		 SET distribution_id = COALESCE(NULLIF($1, ''), distribution_id),
-		     distribution_domain = COALESCE(NULLIF($2, ''), distribution_domain),
-		     distribution_mode = COALESCE(NULLIF($3, ''), distribution_mode),
+		     distribution_domain_name = COALESCE(NULLIF($2, ''), distribution_domain_name),
+		     mode = COALESCE(NULLIF($3, ''), mode),
 		     bindings_json = CASE WHEN $4 != '' THEN $4 ELSE bindings_json END,
 		     plan_json = CASE WHEN $5 != '' THEN $5 ELSE plan_json END,
 		     sync_status = $6,
-		     last_sync_error = $7,
-		     last_synced_at = $8,
-		     updated_at = $8
+		     drift_status = $7,
+		     last_sync_error = $8,
+		     last_synced_at = $9,
+		     last_successful_sync_at = CASE WHEN $6 = 'synced' THEN $9 ELSE last_successful_sync_at END,
+		     updated_at = $9
 		 WHERE id = 'cf-global'`,
-		input.DistributionID, input.DistributionDomain, input.DistributionMode,
-		input.BindingsJSON, input.PlanJSON, input.SyncStatus, input.LastSyncError, now,
+		input.DistributionID, input.DistributionDomainName, input.Mode,
+		input.BindingsJSON, input.PlanJSON, input.SyncStatus, input.DriftStatus,
+		input.LastSyncError, now,
 	)
 	if err != nil {
 		return mapPQError(err)
