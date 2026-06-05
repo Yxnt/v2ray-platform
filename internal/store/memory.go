@@ -1054,12 +1054,14 @@ func (s *MemoryStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) erro
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	if s.cloudFrontConfig == nil {
+		enabled := input.Enabled != nil && *input.Enabled
 		s.cloudFrontConfig = &domain.CloudFrontConfig{
 			ID:                       "cf-global",
 			EncryptedAccessKeyID:     input.EncryptedAccessKeyID,
 			EncryptedSecretAccessKey: input.EncryptedSecretAccessKey,
 			EncryptedSessionToken:    input.EncryptedSessionToken,
 			AWSRegion:                input.AWSRegion,
+			Enabled:                  enabled,
 			CreatedAt:                now,
 			UpdatedAt:                now,
 		}
@@ -1069,6 +1071,9 @@ func (s *MemoryStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) erro
 	s.cloudFrontConfig.EncryptedSecretAccessKey = input.EncryptedSecretAccessKey
 	s.cloudFrontConfig.EncryptedSessionToken = input.EncryptedSessionToken
 	s.cloudFrontConfig.AWSRegion = input.AWSRegion
+	if input.Enabled != nil {
+		s.cloudFrontConfig.Enabled = *input.Enabled
+	}
 	s.cloudFrontConfig.UpdatedAt = now
 	return nil
 }
@@ -1148,6 +1153,17 @@ func (s *MemoryStore) UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput
 		s.cloudFrontConfig.LastSuccessfulSyncAt = &now
 	}
 	s.cloudFrontConfig.UpdatedAt = now
+	return nil
+}
+
+func (s *MemoryStore) UpdateCloudFrontEnabled(enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cloudFrontConfig == nil {
+		return ErrNotFound
+	}
+	s.cloudFrontConfig.Enabled = enabled
+	s.cloudFrontConfig.UpdatedAt = time.Now().UTC()
 	return nil
 }
 

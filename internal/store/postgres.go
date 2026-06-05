@@ -1992,13 +1992,34 @@ func (s *PostgresStore) GetCloudFrontConfig() (*domain.CloudFrontConfig, error) 
 
 func (s *PostgresStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) error {
 	now := time.Now().UTC()
+	enabled := input.Enabled != nil && *input.Enabled
+	if input.Enabled != nil {
+		_, err := s.db.Exec(
+			`INSERT INTO cloudfront_configs
+			 (id, encrypted_access_key_id, encrypted_secret_access_key, encrypted_session_token, aws_region, enabled,
+			  origins_json, distribution_id, distribution_domain_name, mode,
+			  bindings_json, plan_json, last_synced_at, sync_status, last_sync_error,
+			  created_at, updated_at)
+			 VALUES ('cf-global', $1, $2, $3, $4, $5, '[]', '', '', 'managed', '[]', '[]', NULL, 'idle', '', $6, $6)
+			 ON CONFLICT (id) DO UPDATE SET
+			  encrypted_access_key_id = EXCLUDED.encrypted_access_key_id,
+			  encrypted_secret_access_key = EXCLUDED.encrypted_secret_access_key,
+			  encrypted_session_token = EXCLUDED.encrypted_session_token,
+			  aws_region = EXCLUDED.aws_region,
+			  enabled = EXCLUDED.enabled,
+			  updated_at = EXCLUDED.updated_at`,
+			input.EncryptedAccessKeyID, input.EncryptedSecretAccessKey, input.EncryptedSessionToken,
+			input.AWSRegion, enabled, now,
+		)
+		return mapPQError(err)
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO cloudfront_configs
-		 (id, encrypted_access_key_id, encrypted_secret_access_key, encrypted_session_token, aws_region,
+		 (id, encrypted_access_key_id, encrypted_secret_access_key, encrypted_session_token, aws_region, enabled,
 		  origins_json, distribution_id, distribution_domain_name, mode,
 		  bindings_json, plan_json, last_synced_at, sync_status, last_sync_error,
 		  created_at, updated_at)
-		 VALUES ('cf-global', $1, $2, $3, $4, '[]', '', '', 'managed', '[]', '[]', NULL, 'idle', '', $5, $5)
+		 VALUES ('cf-global', $1, $2, $3, $4, $5, '[]', '', '', 'managed', '[]', '[]', NULL, 'idle', '', $6, $6)
 		 ON CONFLICT (id) DO UPDATE SET
 		  encrypted_access_key_id = EXCLUDED.encrypted_access_key_id,
 		  encrypted_secret_access_key = EXCLUDED.encrypted_secret_access_key,
@@ -2006,7 +2027,7 @@ func (s *PostgresStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) er
 		  aws_region = EXCLUDED.aws_region,
 		  updated_at = EXCLUDED.updated_at`,
 		input.EncryptedAccessKeyID, input.EncryptedSecretAccessKey, input.EncryptedSessionToken,
-		input.AWSRegion, now,
+		input.AWSRegion, enabled, now,
 	)
 	return mapPQError(err)
 }
@@ -2108,6 +2129,27 @@ func (s *PostgresStore) UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInp
 		input.DistributionID, input.DistributionDomainName, input.Mode,
 		input.BindingsJSON, input.PlanJSON, input.SyncStatus, input.DriftStatus,
 		input.LastSyncError, now,
+	)
+	if err != nil {
+		return mapPQError(err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) UpdateCloudFrontEnabled(enabled bool) error {
+	now := time.Now().UTC()
+	res, err := s.db.Exec(
+		`UPDATE cloudfront_configs
+		 SET enabled = $1, updated_at = $2
+		 WHERE id = 'cf-global'`,
+		enabled, now,
 	)
 	if err != nil {
 		return mapPQError(err)

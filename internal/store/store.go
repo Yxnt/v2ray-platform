@@ -41,6 +41,7 @@ type SaveCloudFrontConfigInput struct {
 	EncryptedSecretAccessKey string
 	EncryptedSessionToken    string
 	AWSRegion                string
+	Enabled                  *bool // nil = leave unchanged
 }
 
 // UpdateCloudFrontSyncInput stores results of a sync run.
@@ -118,5 +119,6 @@ type Store interface {
 	UpdateCloudFrontBindings(bindingsJSON string) error
 	UpdateCloudFrontOrigins(originsJSON string) error
 	UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput) error
+	UpdateCloudFrontEnabled(enabled bool) error
 	Close() error
 }

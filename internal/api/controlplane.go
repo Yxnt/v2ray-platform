@@ -155,6 +155,7 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService, secretCo
 	mux.HandleFunc("POST /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleSaveCloudFrontConfig))
 	mux.HandleFunc("DELETE /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleDeleteCloudFrontConfig))
 	// CloudFront operations
+	mux.HandleFunc("POST /api/admin/cloudfront/toggle", withAdmin(cfg, svc.sessions, svc.handleCloudFrontToggle))
 	mux.HandleFunc("POST /api/admin/cloudfront/scan", withAdmin(cfg, svc.sessions, svc.handleCloudFrontScan))
 	mux.HandleFunc("POST /api/admin/cloudfront/bind", withAdmin(cfg, svc.sessions, svc.handleCloudFrontBind))
 	mux.HandleFunc("POST /api/admin/cloudfront/plan", withAdmin(cfg, svc.sessions, svc.handleCloudFrontPlan))
@@ -1666,6 +1667,7 @@ type saveCloudFrontConfigRequest struct {
 	SecretAccessKey string `json:"secretAccessKey"`
 	SessionToken   string `json:"sessionToken,omitempty"`
 	Region         string `json:"region"`
+	Enabled        *bool  `json:"enabled,omitempty"`
 }
 
 type cloudFrontConfigResponse struct {
@@ -1687,6 +1689,10 @@ type cloudFrontConfigResponse struct {
 }
 
 func (svc *ControlPlaneService) handleGetCloudFrontConfig(w http.ResponseWriter, r *http.Request) {
+	if svc.secretCodec == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("CLOUDFRONT_MASTER_KEY not configured"))
+		return
+	}
 	cfg, err := svc.store.GetCloudFrontConfig()
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, http.StatusOK, cloudFrontConfigResponse{
@@ -1733,6 +1739,10 @@ func (svc *ControlPlaneService) handleGetCloudFrontConfig(w http.ResponseWriter,
 }
 
 func (svc *ControlPlaneService) handleSaveCloudFrontConfig(w http.ResponseWriter, r *http.Request) {
+	if svc.secretCodec == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("CLOUDFRONT_MASTER_KEY not configured"))
+		return
+	}
 	var req saveCloudFrontConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1772,6 +1782,7 @@ func (svc *ControlPlaneService) handleSaveCloudFrontConfig(w http.ResponseWriter
 		EncryptedSecretAccessKey: encSAK,
 		EncryptedSessionToken:    encST,
 		AWSRegion:                req.Region,
+		Enabled:                  req.Enabled,
 	}); err != nil {
 		writeStoreError(w, err)
 		return
@@ -1791,6 +1802,24 @@ func (svc *ControlPlaneService) handleDeleteCloudFrontConfig(w http.ResponseWrit
 	}
 	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront_config.deleted", "cloudfront_config", "cf-global", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (svc *ControlPlaneService) handleCloudFrontToggle(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("invalid request body"))
+		return
+	}
+	if err := svc.store.UpdateCloudFrontEnabled(req.Enabled); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront_config.toggled", "cloudfront_config", "cf-global", map[string]any{
+		"enabled": req.Enabled,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "enabled": req.Enabled})
 }
 
 // ── CloudFront operation endpoints ──────────────────────────────────────────

@@ -840,6 +840,10 @@
         </div>
       </div>
       <div class="cf-actions">
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;cursor:pointer">
+          <input type="checkbox" id="cf-enabled-toggle" style="accent-color:var(--green)">
+          <span>Enable</span>
+        </label>
         <button class="btn btn-secondary btn-sm" id="cf-scan-btn">Scan AWS</button>
         <button class="btn btn-secondary btn-sm" id="cf-bind-btn">Bind Origins</button>
         <button class="btn btn-secondary btn-sm" id="cf-plan-btn">Compute Drift</button>
@@ -1910,14 +1914,15 @@
         const cfg = await api('/api/admin/cloudfront/config');
         document.getElementById('cf-status-enabled').textContent = cfg.enabled ? 'Yes' : 'No';
         document.getElementById('cf-status-enabled').style.color = cfg.enabled ? 'var(--green)' : 'var(--text-muted)';
-        document.getElementById('cf-status-dist-id').textContent = cfg.distribution_id || '--';
-        document.getElementById('cf-status-domain').textContent = cfg.domain_name || '--';
-        document.getElementById('cf-status-sync').textContent = cfg.sync_status || '--';
-        document.getElementById('cf-status-sync').style.color = cfg.sync_status === 'synced' ? 'var(--green)' : cfg.sync_status === 'drift' ? 'var(--yellow)' : 'var(--text)';
-        document.getElementById('cf-status-drift').textContent = cfg.has_drift ? 'Yes' : 'No';
-        document.getElementById('cf-status-drift').style.color = cfg.has_drift ? 'var(--yellow)' : 'var(--green)';
-        document.getElementById('cf-status-last-sync').textContent = cfg.last_synced_at ? new Date(cfg.last_synced_at).toLocaleString() : '--';
-        document.getElementById('cf-status-key').textContent = cfg.access_key_id_masked || '--';
+        document.getElementById('cf-enabled-toggle').checked = !!cfg.enabled;
+        document.getElementById('cf-status-dist-id').textContent = cfg.distributionId || '--';
+        document.getElementById('cf-status-domain').textContent = cfg.distributionDomainName || '--';
+        document.getElementById('cf-status-sync').textContent = cfg.syncStatus || '--';
+        document.getElementById('cf-status-sync').style.color = cfg.syncStatus === 'synced' ? 'var(--green)' : cfg.syncStatus === 'drift' ? 'var(--yellow)' : 'var(--text)';
+        document.getElementById('cf-status-drift').textContent = cfg.driftStatus === 'drifted' ? 'Yes' : 'No';
+        document.getElementById('cf-status-drift').style.color = cfg.driftStatus === 'drifted' ? 'var(--yellow)' : 'var(--green)';
+        document.getElementById('cf-status-last-sync').textContent = cfg.lastSyncedAt ? new Date(cfg.lastSyncedAt).toLocaleString() : '--';
+        document.getElementById('cf-status-key').textContent = cfg.accessKeyId || '--';
         document.getElementById('cf-region').value = cfg.region || 'us-east-1';
       } catch (error) {
         if (error.status !== 404) {
@@ -1930,13 +1935,13 @@
 
     async function saveCloudFrontConfig() {
       const data = {
-        access_key_id: document.getElementById('cf-access-key').value.trim(),
-        secret_access_key: document.getElementById('cf-secret-key').value,
+        accessKeyId: document.getElementById('cf-access-key').value.trim(),
+        secretAccessKey: document.getElementById('cf-secret-key').value,
         region: document.getElementById('cf-region').value.trim() || 'us-east-1',
       };
       const sessionToken = document.getElementById('cf-session-token').value;
-      if (sessionToken) data.session_token = sessionToken;
-      if (!data.access_key_id || !data.secret_access_key) {
+      if (sessionToken) data.sessionToken = sessionToken;
+      if (!data.accessKeyId || !data.secretAccessKey) {
         toast('Access Key ID and Secret Access Key are required.', 'error');
         return;
       }
@@ -1988,6 +1993,19 @@
     document.getElementById('cf-plan-btn').addEventListener('click', () => cloudFrontAction('plan', 'Plan'));
     document.getElementById('cf-sync-btn').addEventListener('click', () => cloudFrontAction('sync', 'Sync'));
     document.getElementById('cf-refresh-status-btn').addEventListener('click', loadCloudFrontConfig);
+    document.getElementById('cf-enabled-toggle').addEventListener('change', async function() {
+      try {
+        await api('/api/admin/cloudfront/toggle', {
+          method: 'POST',
+          body: JSON.stringify({ enabled: this.checked }),
+        });
+        toast(this.checked ? 'CloudFront enabled' : 'CloudFront disabled');
+        await loadCloudFrontConfig();
+      } catch (error) {
+        toast(error.message, 'error');
+        this.checked = !this.checked;
+      }
+    });
 
     // CF↓ download click handler
     document.addEventListener('click', async (event) => {
