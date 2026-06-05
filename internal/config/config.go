@@ -27,6 +27,7 @@ type ControlPlaneConfig struct {
 	RevisionName            string
 	AgentDownloadURL        string
 	AgentMD5CacheTTL        time.Duration
+	CloudFrontMasterKey     string
 }
 
 type NodeAgentConfig struct {
@@ -78,6 +79,7 @@ func LoadControlPlane() ControlPlaneConfig {
 		RevisionName:            os.Getenv("K_REVISION"),
 		AgentDownloadURL:        envOr("AGENT_DOWNLOAD_URL", "https://github.com/Yxnt/v2ray-platform/releases/download/latest/node-agent-linux-amd64"),
 		AgentMD5CacheTTL:        time.Duration(mustAtoi(envOr("AGENT_MD5_CACHE_TTL_SECONDS", "300"))) * time.Second,
+		CloudFrontMasterKey:     os.Getenv("CLOUDFRONT_MASTER_KEY"),
 	}
 }
 
