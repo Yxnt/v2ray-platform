@@ -266,6 +266,24 @@
     }
     .edit-modal-card h2 { font-size: 16px; font-weight: 700; margin: 0 0 20px; }
     .edit-modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+    /* ── CloudFront status grid ── */
+    .cf-status-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px;
+    }
+    .cf-status-item {
+      background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 12px 14px;
+    }
+    .cf-status-item .cf-label {
+      font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase;
+      letter-spacing: 0.06em; margin-bottom: 4px;
+    }
+    .cf-status-item .cf-value {
+      font-size: 14px; font-weight: 600; color: var(--text); word-break: break-all;
+    }
+    .cf-status-item .cf-value.cf-dim { color: var(--text-dim); font-weight: 500; }
+    .cf-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
   </style>
 </head>
 <body>
@@ -371,6 +389,7 @@
   <button class="tab-btn" data-tab="tokens">Bootstrap Tokens</button>
   <button class="tab-btn" data-tab="logs">Logs & Alerts</button>
   <button class="tab-btn" data-tab="settings">Settings</button>
+  <button class="tab-btn" data-tab="cloudfront">CloudFront</button>
 </nav>
 
 <main class="app-main">
@@ -781,6 +800,81 @@
     </div>
   </section>
 
+  <!-- ════════════════ CLOUDFRONT ════════════════ -->
+  <section class="tab-content" id="tab-cloudfront">
+    <div class="section-hd">
+      <div><h2>CloudFront</h2><p>Manage AWS CloudFront distribution integration for subscription delivery</p></div>
+    </div>
+
+    <!-- Status Card -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-title">Distribution Status</div>
+      <div class="cf-status-grid">
+        <div class="cf-status-item">
+          <div class="cf-label">Enabled</div>
+          <div class="cf-value" id="cf-status-enabled">--</div>
+        </div>
+        <div class="cf-status-item">
+          <div class="cf-label">Distribution ID</div>
+          <div class="cf-value cf-dim" id="cf-status-dist-id">--</div>
+        </div>
+        <div class="cf-status-item">
+          <div class="cf-label">Domain Name</div>
+          <div class="cf-value cf-dim" id="cf-status-domain">--</div>
+        </div>
+        <div class="cf-status-item">
+          <div class="cf-label">Sync Status</div>
+          <div class="cf-value" id="cf-status-sync">--</div>
+        </div>
+        <div class="cf-status-item">
+          <div class="cf-label">Drift</div>
+          <div class="cf-value" id="cf-status-drift">--</div>
+        </div>
+        <div class="cf-status-item">
+          <div class="cf-label">Last Synced</div>
+          <div class="cf-value cf-dim" id="cf-status-last-sync">--</div>
+        </div>
+        <div class="cf-status-item">
+          <div class="cf-label">Access Key ID</div>
+          <div class="cf-value cf-dim" id="cf-status-key">--</div>
+        </div>
+      </div>
+      <div class="cf-actions">
+        <button class="btn btn-secondary btn-sm" id="cf-scan-btn">Scan AWS</button>
+        <button class="btn btn-secondary btn-sm" id="cf-bind-btn">Bind Origins</button>
+        <button class="btn btn-secondary btn-sm" id="cf-plan-btn">Compute Drift</button>
+        <button class="btn btn-primary btn-sm" id="cf-sync-btn">Sync</button>
+        <button class="btn btn-ghost btn-sm" id="cf-refresh-status-btn">Refresh</button>
+      </div>
+      <pre class="output-pre" id="cf-action-output" style="display:none"></pre>
+    </div>
+
+    <!-- Credentials Form -->
+    <div class="card" style="max-width:560px">
+      <div class="card-title">Credentials</div>
+      <div class="field">
+        <label for="cf-access-key">Access Key ID</label>
+        <input id="cf-access-key" placeholder="AKIA...">
+      </div>
+      <div class="field">
+        <label for="cf-secret-key">Secret Access Key</label>
+        <input id="cf-secret-key" type="password" placeholder="••••••••">
+      </div>
+      <div class="field">
+        <label for="cf-session-token">Session Token <span style="color:var(--text-muted);font-size:11px">(optional, for temporary credentials)</span></label>
+        <input id="cf-session-token" type="password" placeholder="FwoGZXIv...">
+      </div>
+      <div class="field">
+        <label for="cf-region">Region</label>
+        <input id="cf-region" placeholder="us-east-1" value="us-east-1">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn btn-primary" id="cf-save-btn">Save credentials</button>
+        <button class="btn btn-danger" id="cf-delete-btn">Delete config</button>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <script>
@@ -1076,7 +1170,7 @@
         const toggleStatus = isSuspended ? 'active' : 'suspended';
         const subToken = member.subscription_token || '';
         const row = document.createElement('tr');
-        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${tierLabel}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}" data-member-tier="${member.tier_id||''}" data-member-quota="${member.quota_bytes_limit||0}">Edit</button><button class="btn btn-secondary btn-xs" data-member-clash="${member.id}" data-member-name="${encodeURIComponent(member.name)}">Clash↓</button><button class="btn btn-secondary btn-xs" data-member-sub="${subToken}" title="Copy subscription URL">Sub🔗</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${tierLabel}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}" data-member-tier="${member.tier_id||''}" data-member-quota="${member.quota_bytes_limit||0}">Edit</button><button class="btn btn-secondary btn-xs" data-member-clash="${member.id}" data-member-name="${encodeURIComponent(member.name)}">Clash↓</button><button class="btn btn-secondary btn-xs" data-member-clash-cf="${member.id}" data-member-name="${encodeURIComponent(member.name)}">CF↓</button><button class="btn btn-secondary btn-xs" data-member-sub="${subToken}" title="Copy subscription URL">Sub🔗</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
         els.membersBody.appendChild(row);
       }
 
@@ -1139,6 +1233,9 @@
       fillSelect(els.groupGrantMember, allMembers.items, member => `${member.name} <${member.email}>`);
       fillSelect(els.assignGroupSelect, nodeGroups.items, group => group.name);
       document.querySelectorAll('[data-select-all]').forEach(input => { input.checked = false; });
+
+      // Load CloudFront status
+      await loadCloudFrontConfig();
     }
 
     async function updateMember(memberID, patch) {
@@ -1806,6 +1903,122 @@
     }
     els.legacyToken.addEventListener('input', updateLoginOverlay);
     updateLoginOverlay();
+
+    // ── CloudFront admin ──
+    async function loadCloudFrontConfig() {
+      try {
+        const cfg = await api('/api/admin/cloudfront/config');
+        document.getElementById('cf-status-enabled').textContent = cfg.enabled ? 'Yes' : 'No';
+        document.getElementById('cf-status-enabled').style.color = cfg.enabled ? 'var(--green)' : 'var(--text-muted)';
+        document.getElementById('cf-status-dist-id').textContent = cfg.distribution_id || '--';
+        document.getElementById('cf-status-domain').textContent = cfg.domain_name || '--';
+        document.getElementById('cf-status-sync').textContent = cfg.sync_status || '--';
+        document.getElementById('cf-status-sync').style.color = cfg.sync_status === 'synced' ? 'var(--green)' : cfg.sync_status === 'drift' ? 'var(--yellow)' : 'var(--text)';
+        document.getElementById('cf-status-drift').textContent = cfg.has_drift ? 'Yes' : 'No';
+        document.getElementById('cf-status-drift').style.color = cfg.has_drift ? 'var(--yellow)' : 'var(--green)';
+        document.getElementById('cf-status-last-sync').textContent = cfg.last_synced_at ? new Date(cfg.last_synced_at).toLocaleString() : '--';
+        document.getElementById('cf-status-key').textContent = cfg.access_key_id_masked || '--';
+        document.getElementById('cf-region').value = cfg.region || 'us-east-1';
+      } catch (error) {
+        if (error.status !== 404) {
+          console.error('Failed to load CloudFront config:', error);
+        }
+        document.getElementById('cf-status-enabled').textContent = 'Not configured';
+        document.getElementById('cf-status-enabled').style.color = 'var(--text-muted)';
+      }
+    }
+
+    async function saveCloudFrontConfig() {
+      const data = {
+        access_key_id: document.getElementById('cf-access-key').value.trim(),
+        secret_access_key: document.getElementById('cf-secret-key').value,
+        region: document.getElementById('cf-region').value.trim() || 'us-east-1',
+      };
+      const sessionToken = document.getElementById('cf-session-token').value;
+      if (sessionToken) data.session_token = sessionToken;
+      if (!data.access_key_id || !data.secret_access_key) {
+        toast('Access Key ID and Secret Access Key are required.', 'error');
+        return;
+      }
+      try {
+        await api('/api/admin/cloudfront/config', {
+          method: 'POST',
+          body: JSON.stringify(data),
+        });
+        toast('CloudFront config saved');
+        document.getElementById('cf-access-key').value = '';
+        document.getElementById('cf-secret-key').value = '';
+        document.getElementById('cf-session-token').value = '';
+        await loadCloudFrontConfig();
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    }
+
+    async function deleteCloudFrontConfig() {
+      if (!confirm('Delete CloudFront configuration? This will not remove the AWS distribution.')) return;
+      try {
+        await api('/api/admin/cloudfront/config', { method: 'DELETE' });
+        toast('CloudFront config deleted');
+        await loadCloudFrontConfig();
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+    }
+
+    async function cloudFrontAction(action, label) {
+      const outputEl = document.getElementById('cf-action-output');
+      outputEl.style.display = 'block';
+      outputEl.textContent = `${label}…`;
+      try {
+        const result = await api(`/api/admin/cloudfront/${action}`, { method: 'POST' });
+        outputEl.textContent = JSON.stringify(result, null, 2);
+        toast(`${label} completed`);
+        await loadCloudFrontConfig();
+      } catch (error) {
+        outputEl.textContent = `Error: ${error.message}`;
+        toast(error.message, 'error');
+      }
+    }
+
+    document.getElementById('cf-save-btn').addEventListener('click', saveCloudFrontConfig);
+    document.getElementById('cf-delete-btn').addEventListener('click', deleteCloudFrontConfig);
+    document.getElementById('cf-scan-btn').addEventListener('click', () => cloudFrontAction('scan', 'Scan'));
+    document.getElementById('cf-bind-btn').addEventListener('click', () => cloudFrontAction('bind', 'Bind'));
+    document.getElementById('cf-plan-btn').addEventListener('click', () => cloudFrontAction('plan', 'Plan'));
+    document.getElementById('cf-sync-btn').addEventListener('click', () => cloudFrontAction('sync', 'Sync'));
+    document.getElementById('cf-refresh-status-btn').addEventListener('click', loadCloudFrontConfig);
+
+    // CF↓ download click handler
+    document.addEventListener('click', async (event) => {
+      const memberID = event.target?.dataset?.memberClashCf;
+      if (!memberID) return;
+      const name = decodeURIComponent(event.target.dataset.memberName || memberID);
+      const url = `/api/admin/members/${memberID}/clash-cf.yaml`;
+      const headers = new Headers();
+      const sessionToken = getSessionToken();
+      if (sessionToken) {
+        headers.set('Authorization', `Bearer ${sessionToken}`);
+      } else if (els.legacyToken.value.trim()) {
+        headers.set('X-Admin-Token', els.legacyToken.value.trim());
+      }
+      try {
+        const resp = await fetch(url, { headers });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({ error: resp.statusText }));
+          throw new Error(err.error || resp.statusText);
+        }
+        const text = await resp.text();
+        const blob = new Blob([text], { type: 'application/yaml' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `clash-cf-${name}.yaml`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } catch (error) {
+        alert(error.message);
+      }
+    });
 
     // ── Initial load ──
     if (getSessionToken() || els.legacyToken.value.trim()) {
