@@ -27,6 +27,7 @@ type Node struct {
 	Tags                 []string   `json:"tags"`
 	RuntimeFlavor        string     `json:"runtime_flavor"`
 	ProxyNodeID          string     `json:"proxy_node_id,omitempty"`
+	RouteKey             string     `json:"route_key,omitempty"`
 	Status               NodeStatus `json:"status"`
 	LastHeartbeatAt      time.Time  `json:"last_heartbeat_at"`
 	CurrentConfigVersion int64      `json:"current_config_version"`
@@ -235,4 +236,52 @@ type Alert struct {
 	TargetID    string        `json:"target_id"`
 	FirstSeenAt time.Time     `json:"first_seen_at"`
 	LastSeenAt  time.Time     `json:"last_seen_at"`
+}
+
+// CloudFrontConfig stores the platform's single CloudFront deployment configuration.
+// Exactly one row; ID is always "cf-global".
+type CloudFrontConfig struct {
+	ID                     string
+	AccessKeyID            string
+	EncryptedSecretKey     string
+	EncryptedSessionToken  string
+	Region                 string
+	OriginsJSON            string      // JSON array of CloudFrontOrigin objects
+	DistributionID         string
+	DistributionDomain     string
+	DistributionMode       string      // "managed" or "adopted"
+	BindingsJSON           string      // JSON array of CloudFrontBinding objects
+	PlanJSON               string      // JSON array of CloudFrontSyncAction objects
+	LastSyncedAt           *time.Time
+	SyncStatus             string
+	LastSyncError          string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+}
+
+// CloudFrontOrigin represents a CloudFront custom origin pointing to a node.
+type CloudFrontOrigin struct {
+	OriginID  string `json:"originId"`
+	Host      string `json:"host"`
+	RouteKey  string `json:"routeKey"`
+	Port      int    `json:"port"`
+	GroupName string `json:"groupName"`
+}
+
+// CloudFrontBinding maps a platform node to an existing CloudFront origin.
+type CloudFrontBinding struct {
+	NodeID    string `json:"nodeId"`
+	OriginID  string `json:"originId"`
+	RouteKey  string `json:"routeKey"`
+	GroupName string `json:"groupName"`
+}
+
+// CloudFrontSyncAction is one atomic mutation to apply during sync.
+type CloudFrontSyncAction struct {
+	Action    string `json:"action"` // add_origin | replace_origin | update_behavior | noop
+	OriginID  string `json:"originId,omitempty"`
+	Host      string `json:"host,omitempty"`
+	RouteKey  string `json:"routeKey,omitempty"`
+	GroupName string `json:"groupName,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }

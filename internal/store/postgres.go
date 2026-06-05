@@ -292,6 +292,10 @@ func (s *PostgresStore) RegisterNode(input RegisterNodeInput) (*RegisterNodeOutp
 	if err != nil {
 		return nil, err
 	}
+	routeKey, err := randomToken(8)
+	if err != nil {
+		return nil, err
+	}
 	node := domain.Node{
 		ID:            newID("node"),
 		Name:          input.Name,
@@ -300,6 +304,7 @@ func (s *PostgresStore) RegisterNode(input RegisterNodeInput) (*RegisterNodeOutp
 		Provider:      input.Provider,
 		Tags:          normalizeTags(input.Tags),
 		RuntimeFlavor: firstNonEmpty(input.RuntimeFlavor, "v2ray"),
+		RouteKey:      routeKey,
 		Status:        domain.NodeStatusProvisioning,
 		NodeTokenHash: sha256Hex(nodeToken),
 		CreatedAt:     now,
@@ -311,9 +316,9 @@ func (s *PostgresStore) RegisterNode(input RegisterNodeInput) (*RegisterNodeOutp
 	}
 	_, err = tx.Exec(
 		`INSERT INTO nodes
-		 (id, name, region, public_host, provider, tags, runtime_flavor, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, NULL, 0, $9, $10, $11)`,
-		node.ID, node.Name, node.Region, node.PublicHost, node.Provider, string(tagsJSON), node.RuntimeFlavor, node.Status, node.NodeTokenHash, node.CreatedAt, node.UpdatedAt,
+		 (id, name, region, public_host, provider, tags, runtime_flavor, route_key, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, NULL, 0, $10, $11, $12)`,
+		node.ID, node.Name, node.Region, node.PublicHost, node.Provider, string(tagsJSON), node.RuntimeFlavor, node.RouteKey, node.Status, node.NodeTokenHash, node.CreatedAt, node.UpdatedAt,
 	)
 	if err != nil {
 		return nil, mapPQError(err)
@@ -1085,7 +1090,7 @@ func (s *PostgresStore) RecordUsage(nodeToken string, snapshots []domain.UsageSn
 
 func (s *PostgresStore) ListNodes() []domain.Node {
 	rows, err := s.db.Query(
-		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
+		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, route_key, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
 		 FROM nodes
 		 ORDER BY created_at ASC`,
 	)
@@ -1395,7 +1400,7 @@ func pageParams(page, limit int) (offset, lim int) {
 func (s *PostgresStore) findNodeByToken(nodeToken string) (*domain.Node, error) {
 	var node *domain.Node
 	err := withRetryableRow(s.db.QueryRow(
-		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
+		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, route_key, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
 		 FROM nodes
 		 WHERE node_token_hash = $1`,
 		sha256Hex(strings.TrimSpace(nodeToken)),
@@ -1416,7 +1421,7 @@ func (s *PostgresStore) findNodeByToken(nodeToken string) (*domain.Node, error) 
 func (s *PostgresStore) getNodeByIDTx(tx *sql.Tx, nodeID string) (*domain.Node, error) {
 	var node *domain.Node
 	err := withRetryableRow(tx.QueryRow(
-		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
+		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, route_key, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at
 		 FROM nodes
 		 WHERE id = $1`,
 		nodeID,
@@ -1620,6 +1625,7 @@ func scanNode(row scanner) (*domain.Node, error) {
 	var rawTags string
 	var heartbeat sql.NullTime
 	var proxyNodeID sql.NullString
+	var routeKey sql.NullString
 	if err := row.Scan(
 		&node.ID,
 		&node.Name,
@@ -1629,6 +1635,7 @@ func scanNode(row scanner) (*domain.Node, error) {
 		&rawTags,
 		&node.RuntimeFlavor,
 		&proxyNodeID,
+		&routeKey,
 		&node.Status,
 		&heartbeat,
 		&node.CurrentConfigVersion,
@@ -1643,6 +1650,9 @@ func scanNode(row scanner) (*domain.Node, error) {
 	}
 	if proxyNodeID.Valid {
 		node.ProxyNodeID = proxyNodeID.String
+	}
+	if routeKey.Valid {
+		node.RouteKey = routeKey.String
 	}
 	if rawTags != "" {
 		if err := json.Unmarshal([]byte(rawTags), &node.Tags); err != nil {
@@ -1939,4 +1949,126 @@ func (s *PostgresStore) SetNodeProxy(nodeID, proxyNodeID string) error {
 	}
 	_, err := s.db.Exec(`UPDATE nodes SET proxy_node_id = $2, updated_at = NOW() WHERE id = $1`, nodeID, proxyNodeID)
 	return mapPQError(err)
+}
+
+// ── CloudFront config ────────────────────────────────────────────────────────
+
+func (s *PostgresStore) GetCloudFrontConfig() (*domain.CloudFrontConfig, error) {
+	var cfg domain.CloudFrontConfig
+	var lastSyncedAt sql.NullTime
+	err := s.db.QueryRow(
+		`SELECT id, access_key_id, encrypted_secret_key, encrypted_session_token, region,
+		        origins_json, distribution_id, distribution_domain, distribution_mode,
+		        bindings_json, plan_json, last_synced_at, sync_status, last_sync_error,
+		        created_at, updated_at
+		 FROM cloudfront_configs WHERE id = 'cf-global'`,
+	).Scan(
+		&cfg.ID, &cfg.AccessKeyID, &cfg.EncryptedSecretKey, &cfg.EncryptedSessionToken,
+		&cfg.Region, &cfg.OriginsJSON, &cfg.DistributionID, &cfg.DistributionDomain,
+		&cfg.DistributionMode, &cfg.BindingsJSON, &cfg.PlanJSON, &lastSyncedAt,
+		&cfg.SyncStatus, &cfg.LastSyncError, &cfg.CreatedAt, &cfg.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, mapPQError(err)
+	}
+	if lastSyncedAt.Valid {
+		cfg.LastSyncedAt = &lastSyncedAt.Time
+	}
+	return &cfg, nil
+}
+
+func (s *PostgresStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) error {
+	now := time.Now().UTC()
+	_, err := s.db.Exec(
+		`INSERT INTO cloudfront_configs
+		 (id, access_key_id, encrypted_secret_key, encrypted_session_token, region,
+		  origins_json, distribution_id, distribution_domain, distribution_mode,
+		  bindings_json, plan_json, last_synced_at, sync_status, last_sync_error,
+		  created_at, updated_at)
+		 VALUES ('cf-global', $1, $2, $3, $4, '[]', '', '', '', '[]', '[]', NULL, '', '', $5, $5)
+		 ON CONFLICT (id) DO UPDATE SET
+		  access_key_id = EXCLUDED.access_key_id,
+		  encrypted_secret_key = EXCLUDED.encrypted_secret_key,
+		  encrypted_session_token = EXCLUDED.encrypted_session_token,
+		  region = EXCLUDED.region,
+		  updated_at = EXCLUDED.updated_at`,
+		input.AccessKeyID, input.EncryptedSecretKey, input.EncryptedSessionToken,
+		input.Region, now,
+	)
+	return mapPQError(err)
+}
+
+func (s *PostgresStore) UpdateCloudFrontDistribution(distributionID, distributionDomain, distributionMode string) error {
+	now := time.Now().UTC()
+	res, err := s.db.Exec(
+		`UPDATE cloudfront_configs
+		 SET distribution_id = $1, distribution_domain = $2, distribution_mode = $3, updated_at = $4
+		 WHERE id = 'cf-global'`,
+		distributionID, distributionDomain, distributionMode, now,
+	)
+	if err != nil {
+		return mapPQError(err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) UpdateCloudFrontBindings(bindingsJSON string) error {
+	now := time.Now().UTC()
+	res, err := s.db.Exec(
+		`UPDATE cloudfront_configs
+		 SET bindings_json = $1, updated_at = $2
+		 WHERE id = 'cf-global'`,
+		bindingsJSON, now,
+	)
+	if err != nil {
+		return mapPQError(err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput) error {
+	now := time.Now().UTC()
+	res, err := s.db.Exec(
+		`UPDATE cloudfront_configs
+		 SET distribution_id = COALESCE(NULLIF($1, ''), distribution_id),
+		     distribution_domain = COALESCE(NULLIF($2, ''), distribution_domain),
+		     distribution_mode = COALESCE(NULLIF($3, ''), distribution_mode),
+		     bindings_json = CASE WHEN $4 != '' THEN $4 ELSE bindings_json END,
+		     plan_json = CASE WHEN $5 != '' THEN $5 ELSE plan_json END,
+		     sync_status = $6,
+		     last_sync_error = $7,
+		     last_synced_at = $8,
+		     updated_at = $8
+		 WHERE id = 'cf-global'`,
+		input.DistributionID, input.DistributionDomain, input.DistributionMode,
+		input.BindingsJSON, input.PlanJSON, input.SyncStatus, input.LastSyncError, now,
+	)
+	if err != nil {
+		return mapPQError(err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

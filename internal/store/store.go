@@ -35,6 +35,25 @@ type UpdateTierInput struct {
 	QuotaType   *string
 }
 
+// SaveCloudFrontConfigInput holds fields for upserting the global CloudFront config.
+type SaveCloudFrontConfigInput struct {
+	AccessKeyID           string
+	EncryptedSecretKey    string
+	EncryptedSessionToken string
+	Region                string
+}
+
+// UpdateCloudFrontSyncInput stores results of a sync run.
+type UpdateCloudFrontSyncInput struct {
+	DistributionID     string
+	DistributionDomain string
+	DistributionMode   string
+	BindingsJSON       string
+	PlanJSON           string
+	SyncStatus         string
+	LastSyncError      string
+}
+
 type Store interface {
 	EnsureAdmin(email, passwordHash string) (*domain.Admin, error)
 	FindAdminByEmail(email string) (*domain.Admin, error)
@@ -90,5 +109,11 @@ type Store interface {
 	GetAndClearPendingAdditions(nodeID string) ([]domain.PendingUserAddition, error)
 	RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error
 	ListAuditLogs(page, limit int) ([]domain.AuditLog, int64, error)
+	// CloudFront config
+	GetCloudFrontConfig() (*domain.CloudFrontConfig, error)
+	SaveCloudFrontConfig(input SaveCloudFrontConfigInput) error
+	UpdateCloudFrontDistribution(distributionID, distributionDomain, distributionMode string) error
+	UpdateCloudFrontBindings(bindingsJSON string) error
+	UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput) error
 	Close() error
 }

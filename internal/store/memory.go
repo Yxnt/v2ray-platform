@@ -82,8 +82,9 @@ type MemoryStore struct {
 	syncEvents      []*domain.NodeSyncEvent
 	auditLogs       []*domain.AuditLog
 	usageSnapshots  []memoryUsageSnapshot
-	pendingRemovals  []domain.PendingUserRemoval
-	pendingAdditions []domain.PendingUserAddition
+	pendingRemovals   []domain.PendingUserRemoval
+	pendingAdditions  []domain.PendingUserAddition
+	cloudFrontConfig  *domain.CloudFrontConfig
 }
 
 type memoryUsageSnapshot struct {
@@ -290,6 +291,10 @@ func (s *MemoryStore) RegisterNode(input RegisterNodeInput) (*RegisterNodeOutput
 	if err != nil {
 		return nil, err
 	}
+	routeKey, err := randomToken(8)
+	if err != nil {
+		return nil, err
+	}
 	node := &domain.Node{
 		ID:            newID("node"),
 		Name:          input.Name,
@@ -298,6 +303,7 @@ func (s *MemoryStore) RegisterNode(input RegisterNodeInput) (*RegisterNodeOutput
 		Provider:      input.Provider,
 		Tags:          normalizeTags(input.Tags),
 		RuntimeFlavor: firstNonEmpty(input.RuntimeFlavor, "v2ray"),
+		RouteKey:      routeKey,
 		Status:        domain.NodeStatusProvisioning,
 		NodeTokenHash: sha256Hex(nodeToken),
 		CreatedAt:     now,
@@ -1030,6 +1036,94 @@ func (s *MemoryStore) GetAndClearPendingAdditions(nodeID string) ([]domain.Pendi
 	}
 	s.pendingAdditions = remaining
 	return out, nil
+}
+
+// ── CloudFront config ────────────────────────────────────────────────────────
+
+func (s *MemoryStore) GetCloudFrontConfig() (*domain.CloudFrontConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cloudFrontConfig == nil {
+		return nil, ErrNotFound
+	}
+	return cloneCloudFrontConfig(s.cloudFrontConfig), nil
+}
+
+func (s *MemoryStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if s.cloudFrontConfig == nil {
+		s.cloudFrontConfig = &domain.CloudFrontConfig{
+			ID:                    "cf-global",
+			AccessKeyID:           input.AccessKeyID,
+			EncryptedSecretKey:    input.EncryptedSecretKey,
+			EncryptedSessionToken: input.EncryptedSessionToken,
+			Region:                input.Region,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+		}
+		return nil
+	}
+	s.cloudFrontConfig.AccessKeyID = input.AccessKeyID
+	s.cloudFrontConfig.EncryptedSecretKey = input.EncryptedSecretKey
+	s.cloudFrontConfig.EncryptedSessionToken = input.EncryptedSessionToken
+	s.cloudFrontConfig.Region = input.Region
+	s.cloudFrontConfig.UpdatedAt = now
+	return nil
+}
+
+func (s *MemoryStore) UpdateCloudFrontDistribution(distributionID, distributionDomain, distributionMode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cloudFrontConfig == nil {
+		return ErrNotFound
+	}
+	s.cloudFrontConfig.DistributionID = distributionID
+	s.cloudFrontConfig.DistributionDomain = distributionDomain
+	s.cloudFrontConfig.DistributionMode = distributionMode
+	s.cloudFrontConfig.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+func (s *MemoryStore) UpdateCloudFrontBindings(bindingsJSON string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cloudFrontConfig == nil {
+		return ErrNotFound
+	}
+	s.cloudFrontConfig.BindingsJSON = bindingsJSON
+	s.cloudFrontConfig.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
+func (s *MemoryStore) UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cloudFrontConfig == nil {
+		return ErrNotFound
+	}
+	now := time.Now().UTC()
+	if input.DistributionID != "" {
+		s.cloudFrontConfig.DistributionID = input.DistributionID
+	}
+	if input.DistributionDomain != "" {
+		s.cloudFrontConfig.DistributionDomain = input.DistributionDomain
+	}
+	if input.DistributionMode != "" {
+		s.cloudFrontConfig.DistributionMode = input.DistributionMode
+	}
+	if input.BindingsJSON != "" {
+		s.cloudFrontConfig.BindingsJSON = input.BindingsJSON
+	}
+	if input.PlanJSON != "" {
+		s.cloudFrontConfig.PlanJSON = input.PlanJSON
+	}
+	s.cloudFrontConfig.SyncStatus = input.SyncStatus
+	s.cloudFrontConfig.LastSyncError = input.LastSyncError
+	s.cloudFrontConfig.LastSyncedAt = &now
+	s.cloudFrontConfig.UpdatedAt = now
+	return nil
 }
 
 func (s *MemoryStore) RecordAuditLog(actorAdminID, action, targetType, targetID string, payload any) error {
