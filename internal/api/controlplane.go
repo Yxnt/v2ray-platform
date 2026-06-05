@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"v2ray-platform/internal/auth"
+	"v2ray-platform/internal/cloudfront"
 	"v2ray-platform/internal/config"
 	"v2ray-platform/internal/crypto"
 	"v2ray-platform/internal/domain"
@@ -71,6 +72,9 @@ type ControlPlaneService struct {
 	agentDownloadURL string
 	agentMD5CacheTTL time.Duration
 	agentCache       agentBinaryCache
+	// CloudFront services — nil when no AWS client is configured.
+	cfScanService *cloudfront.ScanService
+	cfSyncService *cloudfront.SyncService
 }
 
 func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts interface{ ListAlerts() []domain.Alert }, storeMode, serviceName, revisionName, agentDownloadURL string, agentMD5CacheTTL time.Duration) *ControlPlaneService {
@@ -150,6 +154,11 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService, secretCo
 	mux.HandleFunc("GET /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleGetCloudFrontConfig))
 	mux.HandleFunc("POST /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleSaveCloudFrontConfig))
 	mux.HandleFunc("DELETE /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleDeleteCloudFrontConfig))
+	// CloudFront operations
+	mux.HandleFunc("POST /api/admin/cloudfront/scan", withAdmin(cfg, svc.sessions, svc.handleCloudFrontScan))
+	mux.HandleFunc("POST /api/admin/cloudfront/bind", withAdmin(cfg, svc.sessions, svc.handleCloudFrontBind))
+	mux.HandleFunc("POST /api/admin/cloudfront/plan", withAdmin(cfg, svc.sessions, svc.handleCloudFrontPlan))
+	mux.HandleFunc("POST /api/admin/cloudfront/sync", withAdmin(cfg, svc.sessions, svc.handleCloudFrontSync))
 	// Public Clash subscription endpoints — authenticated via member's subscription token only.
 	mux.HandleFunc("GET /sub/{token}/clash.yaml", svc.handlePublicClashSubscription)
 	mux.HandleFunc("GET /sub/{token}/clash-cf.yaml", svc.handlePublicClashCFSubscription)
@@ -1782,6 +1791,167 @@ func (svc *ControlPlaneService) handleDeleteCloudFrontConfig(w http.ResponseWrit
 	}
 	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront_config.deleted", "cloudfront_config", "cf-global", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ── CloudFront operation endpoints ──────────────────────────────────────────
+
+// handleCloudFrontScan discovers origins from the CloudFront distribution.
+// Requires a real AWS client; returns an error if no client is configured.
+func (svc *ControlPlaneService) handleCloudFrontScan(w http.ResponseWriter, r *http.Request) {
+	if svc.cfScanService == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("cloudfront scan not available: no AWS client configured"))
+		return
+	}
+	result, err := svc.cfScanService.ScanDistribution(r.Context())
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront.scanned", "cloudfront_config", "cf-global", map[string]any{
+		"distribution_id": result.DistributionID,
+		"origins_count":   len(result.Origins),
+	})
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleCloudFrontBind matches platform nodes to discovered CloudFront origins.
+func (svc *ControlPlaneService) handleCloudFrontBind(w http.ResponseWriter, r *http.Request) {
+	bindSvc := cloudfront.NewBindService(svc.store)
+	result, err := bindSvc.BindNodes()
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront.bound", "cloudfront_config", "cf-global", map[string]any{
+		"matched_count":   result.MatchedCount,
+		"unmatched_count": result.UnmatchedCount,
+	})
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleCloudFrontPlan computes the sync plan comparing bindings with AWS origins.
+func (svc *ControlPlaneService) handleCloudFrontPlan(w http.ResponseWriter, r *http.Request) {
+	cfg, err := svc.store.GetCloudFrontConfig()
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	// Parse bindings
+	var bindings []domain.CloudFrontBinding
+	if cfg.BindingsJSON != "" {
+		if err := json.Unmarshal([]byte(cfg.BindingsJSON), &bindings); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("parse bindings: %w", err))
+			return
+		}
+	}
+
+	// Parse origins
+	var origins []cloudfront.OriginState
+	if cfg.OriginsJSON != "" {
+		var cfOrigins []domain.CloudFrontOrigin
+		if err := json.Unmarshal([]byte(cfg.OriginsJSON), &cfOrigins); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("parse origins: %w", err))
+			return
+		}
+		for _, o := range cfOrigins {
+			origins = append(origins, cloudfront.OriginState{
+				OriginID:   o.OriginID,
+				DomainName: o.Host,
+				PathPrefix: "/" + o.RouteKey,
+			})
+		}
+	}
+
+	// Build node host and route key maps
+	nodes := svc.store.ListNodes()
+	nodeHosts := make(map[string]string, len(nodes))
+	routeKeys := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		nodeHosts[n.ID] = n.PublicHost
+		routeKeys[n.ID] = n.RouteKey
+	}
+
+	plan := cloudfront.Plan(bindings, origins, nodeHosts, routeKeys)
+
+	// Persist plan
+	planJSON, _ := json.Marshal(plan.Actions)
+	if err := svc.store.UpdateCloudFrontSyncStatus(store.UpdateCloudFrontSyncInput{
+		PlanJSON:    string(planJSON),
+		DriftStatus: plan.DriftStatus,
+	}); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront.planned", "cloudfront_config", "cf-global", map[string]any{
+		"drift_status": plan.DriftStatus,
+		"action_count": len(plan.Actions),
+	})
+	writeJSON(w, http.StatusOK, plan)
+}
+
+// handleCloudFrontSync executes the sync plan against the CloudFront distribution.
+// Requires a real AWS client; returns an error if no client is configured.
+func (svc *ControlPlaneService) handleCloudFrontSync(w http.ResponseWriter, r *http.Request) {
+	if svc.cfSyncService == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("cloudfront sync not available: no AWS client configured"))
+		return
+	}
+
+	// Parse bindings for plan computation
+	cfg, err := svc.store.GetCloudFrontConfig()
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	var bindings []domain.CloudFrontBinding
+	if cfg.BindingsJSON != "" {
+		if err := json.Unmarshal([]byte(cfg.BindingsJSON), &bindings); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("parse bindings: %w", err))
+			return
+		}
+	}
+
+	var origins []cloudfront.OriginState
+	if cfg.OriginsJSON != "" {
+		var cfOrigins []domain.CloudFrontOrigin
+		if err := json.Unmarshal([]byte(cfg.OriginsJSON), &cfOrigins); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("parse origins: %w", err))
+			return
+		}
+		for _, o := range cfOrigins {
+			origins = append(origins, cloudfront.OriginState{
+				OriginID:   o.OriginID,
+				DomainName: o.Host,
+				PathPrefix: "/" + o.RouteKey,
+			})
+		}
+	}
+
+	nodes := svc.store.ListNodes()
+	nodeHosts := make(map[string]string, len(nodes))
+	routeKeys := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		nodeHosts[n.ID] = n.PublicHost
+		routeKeys[n.ID] = n.RouteKey
+	}
+
+	plan := cloudfront.Plan(bindings, origins, nodeHosts, routeKeys)
+
+	result, err := svc.cfSyncService.ExecutePlan(r.Context(), plan)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront.synced", "cloudfront_config", "cf-global", map[string]any{
+		"actions_applied": result.ActionsApplied,
+		"drift_status":    result.DriftStatus,
+		"sync_status":     result.SyncStatus,
+	})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func withAdmin(cfg config.ControlPlaneConfig, sessions *auth.Manager, next http.HandlerFunc) http.HandlerFunc {
