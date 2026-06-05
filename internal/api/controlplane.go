@@ -115,6 +115,7 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService, secretCo
 	mux.HandleFunc("PATCH /api/admin/members/{memberID}", withAdmin(cfg, svc.sessions, svc.handleUpdateMember))
 	mux.HandleFunc("DELETE /api/admin/members/{memberID}", withAdmin(cfg, svc.sessions, svc.handleDeleteMember))
 	mux.HandleFunc("GET /api/admin/members/{memberID}/clash.yaml", withAdmin(cfg, svc.sessions, svc.handleMemberClashConfig))
+	mux.HandleFunc("GET /api/admin/members/{memberID}/clash-cf.yaml", withAdmin(cfg, svc.sessions, svc.handleMemberClashCFConfig))
 	mux.HandleFunc("POST /api/admin/grants", withAdmin(cfg, svc.sessions, svc.handleCreateGrant))
 	mux.HandleFunc("GET /api/admin/grants", withAdmin(cfg, svc.sessions, svc.handleListGrants))
 	mux.HandleFunc("POST /api/admin/grants/batch-revoke", withAdmin(cfg, svc.sessions, svc.handleBatchRevokeGrants))
@@ -149,8 +150,9 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService, secretCo
 	mux.HandleFunc("GET /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleGetCloudFrontConfig))
 	mux.HandleFunc("POST /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleSaveCloudFrontConfig))
 	mux.HandleFunc("DELETE /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleDeleteCloudFrontConfig))
-	// Public Clash subscription endpoint — authenticated via member's subscription token only.
+	// Public Clash subscription endpoints — authenticated via member's subscription token only.
 	mux.HandleFunc("GET /sub/{token}/clash.yaml", svc.handlePublicClashSubscription)
+	mux.HandleFunc("GET /sub/{token}/clash-cf.yaml", svc.handlePublicClashCFSubscription)
 	mux.HandleFunc("POST /api/agent/register", svc.handleAgentRegister)
 	mux.HandleFunc("POST /api/agent/heartbeat", svc.handleAgentHeartbeat)
 	mux.HandleFunc("GET /api/agent/config", svc.handleAgentConfig)
@@ -519,7 +521,7 @@ func (svc *ControlPlaneService) handleListMembers(w http.ResponseWriter, r *http
 	})
 }
 
-func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member) []byte {
+func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMode bool) []byte {
 	// Collect all node IDs the member has access to.
 	nodeIDs := map[string]struct{}{}
 	for _, g := range svc.store.ListGrants() {
@@ -539,15 +541,13 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member) []by
 		}
 	}
 
-	type wsOpts struct {
-		Path string
-	}
 	type proxy struct {
 		Name        string
 		Server      string
 		Port        int
 		UUID        string
 		WsPath      string
+		Host        string // Host header (SNI) for CloudFront custom entry
 		DialerProxy string // name of the relay proxy, empty = direct
 	}
 
@@ -565,6 +565,18 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member) []by
 		}
 	}
 
+	// Resolve CloudFront config if cfMode is requested.
+	var cfDistDomain, cfCustomHost string
+	if cfMode {
+		cfCfg, err := svc.store.GetCloudFrontConfig()
+		if err == nil && cfCfg != nil && cfCfg.Enabled && cfCfg.DistributionDomainName != "" {
+			cfDistDomain = cfCfg.DistributionDomainName
+			cfCustomHost = cfCfg.CustomEntryHost
+		}
+		// If config is missing/disabled/empty domain, fall back to direct mode by
+		// leaving cfDistDomain empty — the loop below will use node.PublicHost.
+	}
+
 	nodeName := func(n *domain.Node) string {
 		if n.Region != "" {
 			return n.Region + " - " + n.Name
@@ -580,11 +592,25 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member) []by
 		}
 		name := nodeName(&node)
 		p := proxy{
-			Name:   name,
-			Server: node.PublicHost,
-			Port:   80,
-			UUID:   member.UUID,
-			WsPath: "/" + node.Name,
+			Name: name,
+			Port: 80,
+			UUID: member.UUID,
+		}
+		if cfDistDomain != "" {
+			// CloudFront mode: all traffic goes through the distribution.
+			p.Server = cfDistDomain
+			if node.RouteKey != "" {
+				p.WsPath = "/" + node.RouteKey
+			} else {
+				p.WsPath = "/" + node.Name
+			}
+			if cfCustomHost != "" {
+				p.Host = cfCustomHost
+			}
+		} else {
+			// Direct mode.
+			p.Server = node.PublicHost
+			p.WsPath = "/" + node.Name
 		}
 		if node.ProxyNodeID != "" {
 			if relay, ok := nodeByID[node.ProxyNodeID]; ok {
@@ -625,6 +651,10 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member) []by
 		buf.WriteString("    network: ws\n")
 		buf.WriteString("    ws-opts:\n")
 		fmt.Fprintf(&buf, "      path: %q\n", p.WsPath)
+		if p.Host != "" {
+			buf.WriteString("      headers:\n")
+			fmt.Fprintf(&buf, "        Host: %q\n", p.Host)
+		}
 		if p.DialerProxy != "" {
 			fmt.Fprintf(&buf, "    dialer-proxy: %q\n", p.DialerProxy)
 		}
@@ -667,7 +697,7 @@ func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", `attachment; filename="v2-subscription"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(svc.buildMemberClashYAML(member))
+	_, _ = w.Write(svc.buildMemberClashYAML(member, false))
 }
 
 // handlePublicClashSubscription serves a Clash subscription YAML for the member
@@ -745,7 +775,105 @@ func (svc *ControlPlaneService) handlePublicClashSubscription(w http.ResponseWri
 	// Clash clients poll this URL; tell them to re-fetch every hour.
 	w.Header().Set("Profile-Update-Interval", "1")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(svc.buildMemberClashYAML(member))
+	_, _ = w.Write(svc.buildMemberClashYAML(member, false))
+}
+
+// handleMemberClashCFConfig serves a CloudFront-mode Clash YAML for an admin-viewed member.
+func (svc *ControlPlaneService) handleMemberClashCFConfig(w http.ResponseWriter, r *http.Request) {
+	memberID := r.PathValue("memberID")
+	if memberID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("missing member id"))
+		return
+	}
+	var member *domain.Member
+	for _, m := range svc.store.ListMembers() {
+		if m.ID == memberID {
+			mc := m
+			member = &mc
+			break
+		}
+	}
+	if member == nil {
+		writeError(w, http.StatusNotFound, errors.New("member not found"))
+		return
+	}
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="clash-cf.yaml"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(svc.buildMemberClashYAML(member, true))
+}
+
+// handlePublicClashCFSubscription serves a CloudFront-mode Clash subscription YAML
+// for the member identified by their subscription_token.
+func (svc *ControlPlaneService) handlePublicClashCFSubscription(w http.ResponseWriter, r *http.Request) {
+	token := r.PathValue("token")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, errors.New("missing token"))
+		return
+	}
+	member, err := svc.store.GetMemberBySubscriptionToken(token)
+	if err != nil {
+		writeError(w, http.StatusNotFound, errors.New("not found"))
+		return
+	}
+	if member.Status != domain.MemberStatusActive {
+		writeError(w, http.StatusForbidden, errors.New("account inactive"))
+		return
+	}
+	// Check expiry in real-time — the background sweep may not have run yet.
+	if member.ExpiresAt != nil && !member.ExpiresAt.After(time.Now().UTC()) {
+		writeError(w, http.StatusForbidden, errors.New("account expired"))
+		return
+	}
+
+	// Build Subscription-Userinfo header so Clash/Stash/etc. show usage stats.
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	var totalQuota int64
+	isMonthly := false
+	if member.TierID != "" {
+		for _, t := range svc.store.ListTiers() {
+			if t.ID == member.TierID {
+				totalQuota = t.QuotaBytes
+				isMonthly = t.QuotaType == "monthly"
+				break
+			}
+		}
+	}
+	if totalQuota == 0 && member.QuotaBytesLimit > 0 {
+		totalQuota = member.QuotaBytesLimit
+	}
+
+	var upload, download int64
+	usages := svc.store.ListMemberUsageSummaries()
+	for _, u := range usages {
+		if u.MemberID != member.ID {
+			continue
+		}
+		if isMonthly {
+			upload, download = svc.store.GetMemberUsageSinceSplit(member.ID, monthStart)
+		} else {
+			upload = u.UplinkBytes
+			download = u.DownlinkBytes
+		}
+		break
+	}
+
+	userinfo := fmt.Sprintf("upload=%d; download=%d", upload, download)
+	if totalQuota > 0 {
+		userinfo += fmt.Sprintf("; total=%d", totalQuota)
+	}
+	if member.ExpiresAt != nil {
+		userinfo += fmt.Sprintf("; expire=%d", member.ExpiresAt.Unix())
+	}
+	w.Header().Set("Subscription-Userinfo", userinfo)
+
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="clash-cf.yaml"`)
+	w.Header().Set("Profile-Update-Interval", "1")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(svc.buildMemberClashYAML(member, true))
 }
 
 func (svc *ControlPlaneService) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
