@@ -11,6 +11,7 @@ import (
 	"v2ray-platform/internal/api"
 	"v2ray-platform/internal/auth"
 	"v2ray-platform/internal/config"
+	"v2ray-platform/internal/crypto"
 	"v2ray-platform/internal/ops"
 	"v2ray-platform/internal/store"
 	rootmigrations "v2ray-platform/migrations"
@@ -47,9 +48,29 @@ func main() {
 		cfg.AgentDownloadURL,
 		cfg.AgentMD5CacheTTL,
 	)
+
+	var secretCodec *crypto.SecretCodec
+	if cfg.CloudFrontMasterKey != "" {
+		key := []byte(cfg.CloudFrontMasterKey)
+		if len(key) < 32 {
+			// Pad short keys to 32 bytes with zeros.
+			padded := make([]byte, 32)
+			copy(padded, key)
+			key = padded
+		} else if len(key) > 32 {
+			key = key[:32]
+		}
+		var err error
+		secretCodec, err = crypto.NewSecretCodec(key)
+		if err != nil {
+			log.Fatalf("init cloudfront secret codec: %v", err)
+		}
+		slog.Info("cloudfront secret codec initialized")
+	}
+
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.NewRouter(cfg, svc),
+		Handler:           api.NewRouter(cfg, svc, secretCodec),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

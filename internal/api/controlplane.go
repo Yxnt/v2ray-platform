@@ -18,6 +18,7 @@ import (
 
 	"v2ray-platform/internal/auth"
 	"v2ray-platform/internal/config"
+	"v2ray-platform/internal/crypto"
 	"v2ray-platform/internal/domain"
 	"v2ray-platform/internal/store"
 )
@@ -63,6 +64,7 @@ type ControlPlaneService struct {
 	store            store.Store
 	sessions         *auth.Manager
 	alerts           interface{ ListAlerts() []domain.Alert }
+	secretCodec      *crypto.SecretCodec
 	storeMode        string
 	serviceName      string
 	revisionName     string
@@ -93,7 +95,8 @@ func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts inter
 	return svc
 }
 
-func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Handler {
+func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService, secretCodec *crypto.SecretCodec) http.Handler {
+	svc.secretCodec = secretCodec
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(mustSub(webAssets, "web"))))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +145,10 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService) http.Han
 	mux.HandleFunc("GET /api/admin/tiers", withAdmin(cfg, svc.sessions, svc.handleListTiers))
 	mux.HandleFunc("PATCH /api/admin/tiers/{tierID}", withAdmin(cfg, svc.sessions, svc.handleUpdateTier))
 	mux.HandleFunc("DELETE /api/admin/tiers/{tierID}", withAdmin(cfg, svc.sessions, svc.handleDeleteTier))
+	// CloudFront config management
+	mux.HandleFunc("GET /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleGetCloudFrontConfig))
+	mux.HandleFunc("POST /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleSaveCloudFrontConfig))
+	mux.HandleFunc("DELETE /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleDeleteCloudFrontConfig))
 	// Public Clash subscription endpoint — authenticated via member's subscription token only.
 	mux.HandleFunc("GET /sub/{token}/clash.yaml", svc.handlePublicClashSubscription)
 	mux.HandleFunc("POST /api/agent/register", svc.handleAgentRegister)
@@ -1513,6 +1520,140 @@ func nodeHasTag(node domain.Node, query string) bool {
 		}
 	}
 	return false
+}
+
+// ── CloudFront config API ─────────────────────────────────────────────────
+
+type saveCloudFrontConfigRequest struct {
+	AccessKeyID    string `json:"accessKeyId"`
+	SecretAccessKey string `json:"secretAccessKey"`
+	SessionToken   string `json:"sessionToken,omitempty"`
+	Region         string `json:"region"`
+}
+
+type cloudFrontConfigResponse struct {
+	ID                      string     `json:"id"`
+	AccessKeyID             string     `json:"accessKeyId"`
+	Region                  string     `json:"region"`
+	Enabled                 bool       `json:"enabled"`
+	CustomEntryHost         string     `json:"customEntryHost,omitempty"`
+	Mode                    string     `json:"mode"`
+	DistributionID          string     `json:"distributionId,omitempty"`
+	DistributionDomainName  string     `json:"distributionDomainName,omitempty"`
+	SyncStatus              string     `json:"syncStatus,omitempty"`
+	DriftStatus             string     `json:"driftStatus,omitempty"`
+	LastSyncedAt            *time.Time `json:"lastSyncedAt,omitempty"`
+	LastSuccessfulSyncAt    *time.Time `json:"lastSuccessfulSyncAt,omitempty"`
+	LastSyncError           string     `json:"lastSyncError,omitempty"`
+	CreatedAt               time.Time  `json:"createdAt"`
+	UpdatedAt               time.Time  `json:"updatedAt"`
+}
+
+func (svc *ControlPlaneService) handleGetCloudFrontConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := svc.store.GetCloudFrontConfig()
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusOK, cloudFrontConfigResponse{
+			ID:      "cf-global",
+			Mode:    "managed",
+			Enabled: false,
+		})
+		return
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	resp := cloudFrontConfigResponse{
+		ID:                     cfg.ID,
+		Region:                 cfg.AWSRegion,
+		Enabled:                cfg.Enabled,
+		CustomEntryHost:        cfg.CustomEntryHost,
+		Mode:                   cfg.Mode,
+		DistributionID:         cfg.DistributionID,
+		DistributionDomainName: cfg.DistributionDomainName,
+		SyncStatus:             cfg.SyncStatus,
+		DriftStatus:            cfg.DriftStatus,
+		LastSyncedAt:           cfg.LastSyncedAt,
+		LastSuccessfulSyncAt:   cfg.LastSuccessfulSyncAt,
+		LastSyncError:          cfg.LastSyncError,
+		CreatedAt:              cfg.CreatedAt,
+		UpdatedAt:              cfg.UpdatedAt,
+	}
+
+	// Mask AccessKeyID — show only last 4 characters.
+	if cfg.EncryptedAccessKeyID != "" {
+		// The stored value is encrypted; decrypt to get the original key for masking.
+		decrypted, decErr := svc.secretCodec.Decrypt(cfg.EncryptedAccessKeyID)
+		if decErr == nil && len(decrypted) > 4 {
+			resp.AccessKeyID = "****" + decrypted[len(decrypted)-4:]
+		} else {
+			resp.AccessKeyID = "****"
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (svc *ControlPlaneService) handleSaveCloudFrontConfig(w http.ResponseWriter, r *http.Request) {
+	var req saveCloudFrontConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.AccessKeyID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("accessKeyId is required"))
+		return
+	}
+	if req.SecretAccessKey == "" {
+		writeError(w, http.StatusBadRequest, errors.New("secretAccessKey is required"))
+		return
+	}
+	if req.Region == "" {
+		writeError(w, http.StatusBadRequest, errors.New("region is required"))
+		return
+	}
+
+	encAKID, err := svc.secretCodec.Encrypt(req.AccessKeyID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("encrypt accessKeyId: %w", err))
+		return
+	}
+	encSAK, err := svc.secretCodec.Encrypt(req.SecretAccessKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("encrypt secretAccessKey: %w", err))
+		return
+	}
+	encST, err := svc.secretCodec.Encrypt(req.SessionToken)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("encrypt sessionToken: %w", err))
+		return
+	}
+
+	if err := svc.store.SaveCloudFrontConfig(store.SaveCloudFrontConfigInput{
+		EncryptedAccessKeyID:     encAKID,
+		EncryptedSecretAccessKey: encSAK,
+		EncryptedSessionToken:    encST,
+		AWSRegion:                req.Region,
+	}); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront_config.saved", "cloudfront_config", "cf-global", map[string]any{
+		"region": req.Region,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (svc *ControlPlaneService) handleDeleteCloudFrontConfig(w http.ResponseWriter, r *http.Request) {
+	if err := svc.store.DeleteCloudFrontConfig(); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront_config.deleted", "cloudfront_config", "cf-global", nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func withAdmin(cfg config.ControlPlaneConfig, sessions *auth.Manager, next http.HandlerFunc) http.HandlerFunc {

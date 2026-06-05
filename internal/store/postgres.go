@@ -2011,6 +2011,21 @@ func (s *PostgresStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) er
 	return mapPQError(err)
 }
 
+func (s *PostgresStore) DeleteCloudFrontConfig() error {
+	res, err := s.db.Exec(`DELETE FROM cloudfront_configs WHERE id = 'cf-global'`)
+	if err != nil {
+		return mapPQError(err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *PostgresStore) UpdateCloudFrontDistribution(distributionID, distributionDomainName, mode string) error {
 	now := time.Now().UTC()
 	res, err := s.db.Exec(

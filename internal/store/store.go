@@ -113,6 +113,7 @@ type Store interface {
 	// CloudFront config
 	GetCloudFrontConfig() (*domain.CloudFrontConfig, error)
 	SaveCloudFrontConfig(input SaveCloudFrontConfigInput) error
+	DeleteCloudFrontConfig() error
 	UpdateCloudFrontDistribution(distributionID, distributionDomain, distributionMode string) error
 	UpdateCloudFrontBindings(bindingsJSON string) error
 	UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput) error

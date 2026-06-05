@@ -1073,6 +1073,16 @@ func (s *MemoryStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) erro
 	return nil
 }
 
+func (s *MemoryStore) DeleteCloudFrontConfig() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cloudFrontConfig == nil {
+		return ErrNotFound
+	}
+	s.cloudFrontConfig = nil
+	return nil
+}
+
 func (s *MemoryStore) UpdateCloudFrontDistribution(distributionID, distributionDomainName, mode string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
