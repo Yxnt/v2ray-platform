@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"v2ray-platform/internal/domain"
 	"v2ray-platform/internal/store"
 )
 
@@ -28,7 +27,6 @@ type SyncResult struct {
 }
 
 // ExecutePlan runs the given sync plan against the CloudFront distribution.
-// Updates the config's sync status in the store.
 func (s *SyncService) ExecutePlan(ctx context.Context, plan *SyncPlan) (*SyncResult, error) {
 	cfg, err := s.store.GetCloudFrontConfig()
 	if err != nil {
@@ -36,57 +34,33 @@ func (s *SyncService) ExecutePlan(ctx context.Context, plan *SyncPlan) (*SyncRes
 	}
 
 	if plan.DriftStatus == "in_sync" {
-		// Nothing to do
-		s.updateStatus(cfg, "synced", "in_sync", "", plan.Actions)
-		return &SyncResult{
-			ActionsApplied: 0,
-			DriftStatus:    "in_sync",
-			SyncStatus:     "synced",
-		}, nil
+		if len(plan.RewriteRoutes) > 0 {
+			if err := s.client.ApplyDistributionRoutes(ctx, cfg.DistributionID, nil, plan.RewriteRoutes); err != nil {
+				s.updateStatus(cfg.DistributionID, cfg.DistributionDomainName, cfg.Mode, "failed", plan.DriftStatus, err.Error(), plan.Actions)
+				return &SyncResult{ActionsApplied: 0, DriftStatus: plan.DriftStatus, SyncStatus: "failed", Error: err.Error()}, nil
+			}
+		}
+		s.updateStatus(cfg.DistributionID, cfg.DistributionDomainName, cfg.Mode, "synced", "in_sync", "", plan.Actions)
+		return &SyncResult{ActionsApplied: 0, DriftStatus: "in_sync", SyncStatus: "synced"}, nil
+	}
+	if plan.DriftStatus == "conflict" {
+		errMsg := "cloudfront sync blocked by unmanaged resource conflict"
+		s.updateStatus(cfg.DistributionID, cfg.DistributionDomainName, cfg.Mode, "failed", "conflict", errMsg, plan.Actions)
+		return &SyncResult{ActionsApplied: 0, DriftStatus: "conflict", SyncStatus: "failed", Error: errMsg}, nil
 	}
 
-	// Collect actions by type
-	var toAdd []OriginState
-	var toRemove []string
-	var toUpdate []OriginState
-	applied := 0
+	if err := s.client.ApplyDistributionRoutes(ctx, cfg.DistributionID, plan.Actions, plan.RewriteRoutes); err != nil {
+		s.updateStatus(cfg.DistributionID, cfg.DistributionDomainName, cfg.Mode, "failed", plan.DriftStatus, err.Error(), plan.Actions)
+		return &SyncResult{ActionsApplied: 0, DriftStatus: plan.DriftStatus, SyncStatus: "failed", Error: err.Error()}, nil
+	}
 
+	applied := 0
 	for _, action := range plan.Actions {
-		switch action.Action {
-		case "add_origin":
-			toAdd = append(toAdd, OriginState{
-				OriginID:   action.OriginID,
-				DomainName: action.Host,
-				PathPrefix: "/" + action.RouteKey,
-			})
+		if action.Action != "noop" {
 			applied++
-		case "replace_origin":
-			toUpdate = append(toUpdate, OriginState{
-				OriginID:   action.OriginID,
-				DomainName: action.Host,
-				PathPrefix: "/" + action.RouteKey,
-			})
-			applied++
-		case "remove_origin":
-			toRemove = append(toRemove, action.OriginID)
-			applied++
-		case "noop":
-			// Skip
 		}
 	}
-
-	// Execute mutations
-	if err := s.client.UpdateOrigins(ctx, cfg.DistributionID, toAdd, toRemove, toUpdate); err != nil {
-		s.updateStatus(cfg, "failed", plan.DriftStatus, err.Error(), plan.Actions)
-		return &SyncResult{
-			ActionsApplied: 0,
-			DriftStatus:    plan.DriftStatus,
-			SyncStatus:     "failed",
-			Error:          err.Error(),
-		}, nil
-	}
-
-	s.updateStatus(cfg, "synced", "in_sync", "", plan.Actions)
+	s.updateStatus(cfg.DistributionID, cfg.DistributionDomainName, cfg.Mode, "synced", "in_sync", "", plan.Actions)
 	return &SyncResult{
 		ActionsApplied: applied,
 		DriftStatus:    "in_sync",
@@ -94,16 +68,15 @@ func (s *SyncService) ExecutePlan(ctx context.Context, plan *SyncPlan) (*SyncRes
 	}, nil
 }
 
-func (s *SyncService) updateStatus(cfg *domain.CloudFrontConfig, syncStatus, driftStatus, syncErr string, actions []domain.CloudFrontSyncAction) {
+func (s *SyncService) updateStatus(distributionID, distributionDomainName, mode, syncStatus, driftStatus, syncErr string, actions []RouteAction) {
 	planJSON, _ := json.Marshal(actions)
-	input := store.UpdateCloudFrontSyncInput{
-		DistributionID:         cfg.DistributionID,
-		DistributionDomainName: cfg.DistributionDomainName,
-		Mode:                   cfg.Mode,
+	_ = s.store.UpdateCloudFrontSyncStatus(store.UpdateCloudFrontSyncInput{
+		DistributionID:         distributionID,
+		DistributionDomainName: distributionDomainName,
+		Mode:                   mode,
 		PlanJSON:               string(planJSON),
 		SyncStatus:             syncStatus,
 		DriftStatus:            driftStatus,
 		LastSyncError:          syncErr,
-	}
-	s.store.UpdateCloudFrontSyncStatus(input)
+	})
 }

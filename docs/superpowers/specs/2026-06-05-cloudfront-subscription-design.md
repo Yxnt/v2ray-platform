@@ -96,6 +96,8 @@ CloudFront then routes each request path to the matching node origin:
 
 - `/{route_key}` -> `node.public_host`
 
+Because the current node runtime still listens on the direct WebSocket path `/{node.name}`, the platform-managed CloudFront distribution must also attach a viewer-request CloudFront Function to every platform-managed behavior. The function rewrites the request URI from `/{route_key}` to the node's current direct WebSocket path before the request reaches the origin. CloudFront selects the cache behavior and origin before this function rewrite, so the stable route key remains the external routing key while the origin receives the path it already expects.
+
 This keeps authorization and member-to-node visibility identical between direct and CloudFront variants. Only the connection endpoint rendering changes.
 
 ## Stable Route Key
@@ -228,9 +230,12 @@ Managed behaviors are identified by:
 - path pattern using `/{route_key}`
 - origin target ID matching the platform origin naming convention
 
+The platform also owns one CloudFront Function named `v2ray-platform-route-rewrite`. It contains only the route-key-to-node-path rewrite map for platform-managed CloudFront behaviors.
+
 Rules:
 
 - only platform-managed origins and behaviors may be updated or removed automatically
+- only the platform-managed rewrite function may be created, updated, published, or attached automatically
 - unmanaged user-defined distribution items are read but not modified
 - if unmanaged items conflict with a planned managed path, sync must stop with a conflict error
 

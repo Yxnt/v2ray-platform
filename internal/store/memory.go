@@ -66,25 +66,25 @@ type RegisterNodeOutput struct {
 }
 
 type MemoryStore struct {
-	mu              sync.RWMutex
-	admins          map[string]*domain.Admin
-	adminSessions   map[string]*domain.AdminSession
-	nodes           map[string]*domain.Node
-	nodeGroups      map[string]*domain.NodeGroup
-	nodeGroupNodes  map[string]map[string]time.Time
-	groupGrants     map[string]map[string]time.Time
-	members         map[string]*domain.Member
-	tiers           map[string]*domain.Tier
-	bootstrapTokens map[string]*domain.BootstrapToken
-	grants          map[string]*domain.AccessGrant
-	credentials     map[string]*domain.NodeCredential
-	revisions       map[string]*domain.ConfigRevision
-	syncEvents      []*domain.NodeSyncEvent
-	auditLogs       []*domain.AuditLog
-	usageSnapshots  []memoryUsageSnapshot
-	pendingRemovals   []domain.PendingUserRemoval
-	pendingAdditions  []domain.PendingUserAddition
-	cloudFrontConfig  *domain.CloudFrontConfig
+	mu               sync.RWMutex
+	admins           map[string]*domain.Admin
+	adminSessions    map[string]*domain.AdminSession
+	nodes            map[string]*domain.Node
+	nodeGroups       map[string]*domain.NodeGroup
+	nodeGroupNodes   map[string]map[string]time.Time
+	groupGrants      map[string]map[string]time.Time
+	members          map[string]*domain.Member
+	tiers            map[string]*domain.Tier
+	bootstrapTokens  map[string]*domain.BootstrapToken
+	grants           map[string]*domain.AccessGrant
+	credentials      map[string]*domain.NodeCredential
+	revisions        map[string]*domain.ConfigRevision
+	syncEvents       []*domain.NodeSyncEvent
+	auditLogs        []*domain.AuditLog
+	usageSnapshots   []memoryUsageSnapshot
+	pendingRemovals  []domain.PendingUserRemoval
+	pendingAdditions []domain.PendingUserAddition
+	cloudFrontConfig *domain.CloudFrontConfig
 }
 
 type memoryUsageSnapshot struct {
@@ -1061,18 +1061,46 @@ func (s *MemoryStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) erro
 			EncryptedSecretAccessKey: input.EncryptedSecretAccessKey,
 			EncryptedSessionToken:    input.EncryptedSessionToken,
 			AWSRegion:                input.AWSRegion,
+			CustomEntryHost:          input.CustomEntryHost,
+			Mode:                     firstNonEmpty(input.Mode, "managed"),
+			DistributionID:           input.DistributionID,
+			DistributionDomainName:   input.DistributionDomainName,
 			Enabled:                  enabled,
 			CreatedAt:                now,
 			UpdatedAt:                now,
 		}
 		return nil
 	}
-	s.cloudFrontConfig.EncryptedAccessKeyID = input.EncryptedAccessKeyID
-	s.cloudFrontConfig.EncryptedSecretAccessKey = input.EncryptedSecretAccessKey
-	s.cloudFrontConfig.EncryptedSessionToken = input.EncryptedSessionToken
-	s.cloudFrontConfig.AWSRegion = input.AWSRegion
+	targetChanged := (input.DistributionID != "" && s.cloudFrontConfig.DistributionID != input.DistributionID) ||
+		(input.DistributionDomainName != "" && s.cloudFrontConfig.DistributionDomainName != input.DistributionDomainName) ||
+		(input.Mode != "" && s.cloudFrontConfig.Mode != input.Mode)
+	if !input.RetainExistingSecrets || input.EncryptedAccessKeyID != "" {
+		s.cloudFrontConfig.EncryptedAccessKeyID = input.EncryptedAccessKeyID
+	}
+	if !input.RetainExistingSecrets || input.EncryptedSecretAccessKey != "" {
+		s.cloudFrontConfig.EncryptedSecretAccessKey = input.EncryptedSecretAccessKey
+	}
+	if !input.RetainExistingSecrets || input.EncryptedSessionToken != "" {
+		s.cloudFrontConfig.EncryptedSessionToken = input.EncryptedSessionToken
+	}
+	if input.AWSRegion != "" {
+		s.cloudFrontConfig.AWSRegion = input.AWSRegion
+	}
+	s.cloudFrontConfig.CustomEntryHost = input.CustomEntryHost
+	if input.Mode != "" {
+		s.cloudFrontConfig.Mode = input.Mode
+	}
+	if input.DistributionID != "" {
+		s.cloudFrontConfig.DistributionID = input.DistributionID
+	}
+	if input.DistributionDomainName != "" {
+		s.cloudFrontConfig.DistributionDomainName = input.DistributionDomainName
+	}
 	if input.Enabled != nil {
 		s.cloudFrontConfig.Enabled = *input.Enabled
+	}
+	if targetChanged {
+		clearCloudFrontSyncMarkers(s.cloudFrontConfig)
 	}
 	s.cloudFrontConfig.UpdatedAt = now
 	return nil
@@ -1094,11 +1122,25 @@ func (s *MemoryStore) UpdateCloudFrontDistribution(distributionID, distributionD
 	if s.cloudFrontConfig == nil {
 		return ErrNotFound
 	}
+	targetChanged := s.cloudFrontConfig.DistributionID != distributionID ||
+		s.cloudFrontConfig.DistributionDomainName != distributionDomainName ||
+		s.cloudFrontConfig.Mode != mode
 	s.cloudFrontConfig.DistributionID = distributionID
 	s.cloudFrontConfig.DistributionDomainName = distributionDomainName
 	s.cloudFrontConfig.Mode = mode
+	if targetChanged {
+		clearCloudFrontSyncMarkers(s.cloudFrontConfig)
+	}
 	s.cloudFrontConfig.UpdatedAt = time.Now().UTC()
 	return nil
+}
+
+func clearCloudFrontSyncMarkers(cfg *domain.CloudFrontConfig) {
+	cfg.SyncStatus = "idle"
+	cfg.DriftStatus = ""
+	cfg.LastSyncError = ""
+	cfg.LastSyncedAt = nil
+	cfg.LastSuccessfulSyncAt = nil
 }
 
 func (s *MemoryStore) UpdateCloudFrontOrigins(originsJSON string) error {
@@ -1118,7 +1160,11 @@ func (s *MemoryStore) UpdateCloudFrontBindings(bindingsJSON string) error {
 	if s.cloudFrontConfig == nil {
 		return ErrNotFound
 	}
+	bindingsChanged := s.cloudFrontConfig.BindingsJSON != bindingsJSON
 	s.cloudFrontConfig.BindingsJSON = bindingsJSON
+	if bindingsChanged {
+		clearCloudFrontSyncMarkers(s.cloudFrontConfig)
+	}
 	s.cloudFrontConfig.UpdatedAt = time.Now().UTC()
 	return nil
 }
@@ -1145,10 +1191,17 @@ func (s *MemoryStore) UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInput
 	if input.PlanJSON != "" {
 		s.cloudFrontConfig.PlanJSON = input.PlanJSON
 	}
-	s.cloudFrontConfig.SyncStatus = input.SyncStatus
+	updatesSyncAttempt := !input.PreserveSyncStatus || input.SyncStatus != ""
+	if updatesSyncAttempt {
+		s.cloudFrontConfig.SyncStatus = input.SyncStatus
+	}
 	s.cloudFrontConfig.DriftStatus = input.DriftStatus
-	s.cloudFrontConfig.LastSyncError = input.LastSyncError
-	s.cloudFrontConfig.LastSyncedAt = &now
+	if !input.PreserveSyncStatus || input.LastSyncError != "" {
+		s.cloudFrontConfig.LastSyncError = input.LastSyncError
+	}
+	if updatesSyncAttempt {
+		s.cloudFrontConfig.LastSyncedAt = &now
+	}
 	if input.SyncStatus == "synced" {
 		s.cloudFrontConfig.LastSuccessfulSyncAt = &now
 	}
@@ -1383,28 +1436,28 @@ func (s *MemoryStore) GetMemberBySubscriptionToken(token string) (*domain.Member
 }
 
 func (s *MemoryStore) ListNodeConfigRevisions(nodeID string) ([]domain.ConfigRevision, error) {
-s.mu.RLock()
-defer s.mu.RUnlock()
-rev, ok := s.revisions[nodeID]
-if !ok {
-return []domain.ConfigRevision{}, nil
-}
-r := *rev
-r.Config = ""
-return []domain.ConfigRevision{r}, nil
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rev, ok := s.revisions[nodeID]
+	if !ok {
+		return []domain.ConfigRevision{}, nil
+	}
+	r := *rev
+	r.Config = ""
+	return []domain.ConfigRevision{r}, nil
 }
 
 func (s *MemoryStore) RollbackNodeConfig(_ string, _ int64) (*domain.ConfigRevision, error) {
-return nil, ErrNotFound
+	return nil, ErrNotFound
 }
 
 func (s *MemoryStore) SetNodeProxy(nodeID, proxyNodeID string) error {
-s.mu.Lock()
-defer s.mu.Unlock()
-node, ok := s.nodes[nodeID]
-if !ok {
-return ErrNotFound
-}
-node.ProxyNodeID = proxyNodeID
-return nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	node, ok := s.nodes[nodeID]
+	if !ok {
+		return ErrNotFound
+	}
+	node.ProxyNodeID = proxyNodeID
+	return nil
 }

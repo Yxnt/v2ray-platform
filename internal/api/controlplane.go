@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,8 +32,8 @@ type adminClaimsKey struct{}
 
 // agentBinaryCache holds the latest fetched MD5 checksums for agent binaries.
 type agentBinaryCache struct {
-	mu     sync.RWMutex
-	md5s   map[string]string // arch → md5hex
+	mu        sync.RWMutex
+	md5s      map[string]string // arch → md5hex
 	fetchedAt time.Time
 }
 
@@ -62,19 +63,21 @@ func (c *agentBinaryCache) age() time.Duration {
 }
 
 type ControlPlaneService struct {
-	store            store.Store
-	sessions         *auth.Manager
-	alerts           interface{ ListAlerts() []domain.Alert }
-	secretCodec      *crypto.SecretCodec
-	storeMode        string
-	serviceName      string
-	revisionName     string
-	agentDownloadURL string
-	agentMD5CacheTTL time.Duration
-	agentCache       agentBinaryCache
-	// CloudFront services — nil when no AWS client is configured.
-	cfScanService *cloudfront.ScanService
-	cfSyncService *cloudfront.SyncService
+	store                   store.Store
+	sessions                *auth.Manager
+	alerts                  interface{ ListAlerts() []domain.Alert }
+	secretCodec             *crypto.SecretCodec
+	cloudFrontClientFactory func(*domain.CloudFrontConfig) (cloudfront.Client, error)
+	storeMode               string
+	serviceName             string
+	revisionName            string
+	agentDownloadURL        string
+	agentMD5CacheTTL        time.Duration
+	agentCache              agentBinaryCache
+}
+
+type cloudFrontDistributionCreator interface {
+	CreateDistribution(ctx context.Context, input cloudfront.CreateDistributionInput) (*cloudfront.DistributionState, error)
 }
 
 func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts interface{ ListAlerts() []domain.Alert }, storeMode, serviceName, revisionName, agentDownloadURL string, agentMD5CacheTTL time.Duration) *ControlPlaneService {
@@ -155,6 +158,7 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService, secretCo
 	mux.HandleFunc("POST /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleSaveCloudFrontConfig))
 	mux.HandleFunc("DELETE /api/admin/cloudfront/config", withAdmin(cfg, svc.sessions, svc.handleDeleteCloudFrontConfig))
 	// CloudFront operations
+	mux.HandleFunc("GET /api/admin/cloudfront/distributions", withAdmin(cfg, svc.sessions, svc.handleListCloudFrontDistributions))
 	mux.HandleFunc("POST /api/admin/cloudfront/toggle", withAdmin(cfg, svc.sessions, svc.handleCloudFrontToggle))
 	mux.HandleFunc("POST /api/admin/cloudfront/scan", withAdmin(cfg, svc.sessions, svc.handleCloudFrontScan))
 	mux.HandleFunc("POST /api/admin/cloudfront/bind", withAdmin(cfg, svc.sessions, svc.handleCloudFrontBind))
@@ -531,7 +535,7 @@ func (svc *ControlPlaneService) handleListMembers(w http.ResponseWriter, r *http
 	})
 }
 
-func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMode bool) []byte {
+func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMode bool, cfEntryHost, cfCustomHost string) []byte {
 	// Collect all node IDs the member has access to.
 	nodeIDs := map[string]struct{}{}
 	for _, g := range svc.store.ListGrants() {
@@ -556,6 +560,7 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMo
 		Server      string
 		Port        int
 		UUID        string
+		TLS         bool
 		WsPath      string
 		Host        string // Host header (SNI) for CloudFront custom entry
 		DialerProxy string // name of the relay proxy, empty = direct
@@ -573,18 +578,6 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMo
 		if n, ok := nodeByID[id]; ok && n.ProxyNodeID != "" {
 			nodeIDs[n.ProxyNodeID] = struct{}{}
 		}
-	}
-
-	// Resolve CloudFront config if cfMode is requested.
-	var cfDistDomain, cfCustomHost string
-	if cfMode {
-		cfCfg, err := svc.store.GetCloudFrontConfig()
-		if err == nil && cfCfg != nil && cfCfg.Enabled && cfCfg.DistributionDomainName != "" {
-			cfDistDomain = cfCfg.DistributionDomainName
-			cfCustomHost = cfCfg.CustomEntryHost
-		}
-		// If config is missing/disabled/empty domain, fall back to direct mode by
-		// leaving cfDistDomain empty — the loop below will use node.PublicHost.
 	}
 
 	nodeName := func(n *domain.Node) string {
@@ -606,15 +599,17 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMo
 			Port: 80,
 			UUID: member.UUID,
 		}
-		if cfDistDomain != "" {
+		if cfMode {
 			// CloudFront mode: all traffic goes through the distribution.
-			p.Server = cfDistDomain
+			p.Server = cfEntryHost
+			p.Port = 443
+			p.TLS = true
 			if node.RouteKey != "" {
 				p.WsPath = "/" + node.RouteKey
 			} else {
 				p.WsPath = "/" + node.Name
 			}
-			if cfCustomHost != "" {
+			if cfCustomHost != "" && cfCustomHost != cfEntryHost {
 				p.Host = cfCustomHost
 			}
 		} else {
@@ -658,6 +653,9 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMo
 		fmt.Fprintf(&buf, "    uuid: %q\n", p.UUID)
 		buf.WriteString("    alterId: 0\n")
 		buf.WriteString("    cipher: auto\n")
+		if p.TLS {
+			buf.WriteString("    tls: true\n")
+		}
 		buf.WriteString("    network: ws\n")
 		buf.WriteString("    ws-opts:\n")
 		fmt.Fprintf(&buf, "      path: %q\n", p.WsPath)
@@ -686,6 +684,40 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMo
 	return buf.Bytes()
 }
 
+func (svc *ControlPlaneService) cloudFrontRenderConfig() (entryHost string, customHost string, err error) {
+	cfg, err := svc.store.GetCloudFrontConfig()
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", "", errors.New("cloudfront subscription not configured")
+		}
+		return "", "", err
+	}
+	if !cfg.Enabled {
+		return "", "", errors.New("cloudfront subscription is disabled")
+	}
+	if strings.TrimSpace(cfg.DistributionID) == "" || strings.TrimSpace(cfg.DistributionDomainName) == "" {
+		return "", "", errors.New("cloudfront subscription is unavailable until a distribution is bound")
+	}
+	if cfg.LastSuccessfulSyncAt == nil {
+		return "", "", errors.New("cloudfront subscription is unavailable until the first successful sync completes")
+	}
+	if cfg.SyncStatus == "failed" {
+		return "", "", errors.New("cloudfront subscription is unavailable because the latest sync failed")
+	}
+	if cfg.DriftStatus == "drifted" || cfg.DriftStatus == "conflict" {
+		return "", "", errors.New("cloudfront subscription is unavailable until cloudfront drift is resolved")
+	}
+	customHost = strings.TrimSpace(cfg.CustomEntryHost)
+	entryHost = strings.TrimSpace(cfg.DistributionDomainName)
+	if customHost != "" {
+		entryHost = customHost
+	}
+	if entryHost == "" {
+		return "", "", errors.New("cloudfront subscription entry host is not configured")
+	}
+	return entryHost, customHost, nil
+}
+
 func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r *http.Request) {
 	memberID := r.PathValue("memberID")
 	if memberID == "" {
@@ -707,7 +739,7 @@ func (svc *ControlPlaneService) handleMemberClashConfig(w http.ResponseWriter, r
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Header().Set("Content-Disposition", `attachment; filename="v2-subscription"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(svc.buildMemberClashYAML(member, false))
+	_, _ = w.Write(svc.buildMemberClashYAML(member, false, "", ""))
 }
 
 // handlePublicClashSubscription serves a Clash subscription YAML for the member
@@ -785,7 +817,7 @@ func (svc *ControlPlaneService) handlePublicClashSubscription(w http.ResponseWri
 	// Clash clients poll this URL; tell them to re-fetch every hour.
 	w.Header().Set("Profile-Update-Interval", "1")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(svc.buildMemberClashYAML(member, false))
+	_, _ = w.Write(svc.buildMemberClashYAML(member, false, "", ""))
 }
 
 // handleMemberClashCFConfig serves a CloudFront-mode Clash YAML for an admin-viewed member.
@@ -807,10 +839,15 @@ func (svc *ControlPlaneService) handleMemberClashCFConfig(w http.ResponseWriter,
 		writeError(w, http.StatusNotFound, errors.New("member not found"))
 		return
 	}
+	entryHost, customHost, err := svc.cloudFrontRenderConfig()
+	if err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
 	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="clash-cf.yaml"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(svc.buildMemberClashYAML(member, true))
+	_, _ = w.Write(svc.buildMemberClashYAML(member, true, entryHost, customHost))
 }
 
 // handlePublicClashCFSubscription serves a CloudFront-mode Clash subscription YAML
@@ -833,6 +870,11 @@ func (svc *ControlPlaneService) handlePublicClashCFSubscription(w http.ResponseW
 	// Check expiry in real-time — the background sweep may not have run yet.
 	if member.ExpiresAt != nil && !member.ExpiresAt.After(time.Now().UTC()) {
 		writeError(w, http.StatusForbidden, errors.New("account expired"))
+		return
+	}
+	entryHost, customHost, err := svc.cloudFrontRenderConfig()
+	if err != nil {
+		writeError(w, http.StatusConflict, err)
 		return
 	}
 
@@ -883,7 +925,7 @@ func (svc *ControlPlaneService) handlePublicClashCFSubscription(w http.ResponseW
 	w.Header().Set("Content-Disposition", `attachment; filename="clash-cf.yaml"`)
 	w.Header().Set("Profile-Update-Interval", "1")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(svc.buildMemberClashYAML(member, true))
+	_, _ = w.Write(svc.buildMemberClashYAML(member, true, entryHost, customHost))
 }
 
 func (svc *ControlPlaneService) handleDeleteMember(w http.ResponseWriter, r *http.Request) {
@@ -1663,29 +1705,33 @@ func nodeHasTag(node domain.Node, query string) bool {
 // ── CloudFront config API ─────────────────────────────────────────────────
 
 type saveCloudFrontConfigRequest struct {
-	AccessKeyID    string `json:"accessKeyId"`
-	SecretAccessKey string `json:"secretAccessKey"`
-	SessionToken   string `json:"sessionToken,omitempty"`
-	Region         string `json:"region"`
-	Enabled        *bool  `json:"enabled,omitempty"`
+	AccessKeyID            string `json:"accessKeyId"`
+	SecretAccessKey        string `json:"secretAccessKey"`
+	SessionToken           string `json:"sessionToken,omitempty"`
+	Region                 string `json:"region"`
+	CustomEntryHost        string `json:"customEntryHost,omitempty"`
+	Mode                   string `json:"mode,omitempty"`
+	DistributionID         string `json:"distributionId,omitempty"`
+	DistributionDomainName string `json:"distributionDomainName,omitempty"`
+	Enabled                *bool  `json:"enabled,omitempty"`
 }
 
 type cloudFrontConfigResponse struct {
-	ID                      string     `json:"id"`
-	AccessKeyID             string     `json:"accessKeyId"`
-	Region                  string     `json:"region"`
-	Enabled                 bool       `json:"enabled"`
-	CustomEntryHost         string     `json:"customEntryHost,omitempty"`
-	Mode                    string     `json:"mode"`
-	DistributionID          string     `json:"distributionId,omitempty"`
-	DistributionDomainName  string     `json:"distributionDomainName,omitempty"`
-	SyncStatus              string     `json:"syncStatus,omitempty"`
-	DriftStatus             string     `json:"driftStatus,omitempty"`
-	LastSyncedAt            *time.Time `json:"lastSyncedAt,omitempty"`
-	LastSuccessfulSyncAt    *time.Time `json:"lastSuccessfulSyncAt,omitempty"`
-	LastSyncError           string     `json:"lastSyncError,omitempty"`
-	CreatedAt               time.Time  `json:"createdAt"`
-	UpdatedAt               time.Time  `json:"updatedAt"`
+	ID                     string     `json:"id"`
+	AccessKeyID            string     `json:"accessKeyId"`
+	Region                 string     `json:"region"`
+	Enabled                bool       `json:"enabled"`
+	CustomEntryHost        string     `json:"customEntryHost,omitempty"`
+	Mode                   string     `json:"mode"`
+	DistributionID         string     `json:"distributionId,omitempty"`
+	DistributionDomainName string     `json:"distributionDomainName,omitempty"`
+	SyncStatus             string     `json:"syncStatus,omitempty"`
+	DriftStatus            string     `json:"driftStatus,omitempty"`
+	LastSyncedAt           *time.Time `json:"lastSyncedAt,omitempty"`
+	LastSuccessfulSyncAt   *time.Time `json:"lastSuccessfulSyncAt,omitempty"`
+	LastSyncError          string     `json:"lastSyncError,omitempty"`
+	CreatedAt              time.Time  `json:"createdAt"`
+	UpdatedAt              time.Time  `json:"updatedAt"`
 }
 
 func (svc *ControlPlaneService) handleGetCloudFrontConfig(w http.ResponseWriter, r *http.Request) {
@@ -1698,6 +1744,7 @@ func (svc *ControlPlaneService) handleGetCloudFrontConfig(w http.ResponseWriter,
 		writeJSON(w, http.StatusOK, cloudFrontConfigResponse{
 			ID:      "cf-global",
 			Mode:    "managed",
+			Region:  "us-east-1",
 			Enabled: false,
 		})
 		return
@@ -1748,33 +1795,66 @@ func (svc *ControlPlaneService) handleSaveCloudFrontConfig(w http.ResponseWriter
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if req.AccessKeyID == "" {
-		writeError(w, http.StatusBadRequest, errors.New("accessKeyId is required"))
-		return
-	}
-	if req.SecretAccessKey == "" {
-		writeError(w, http.StatusBadRequest, errors.New("secretAccessKey is required"))
-		return
-	}
 	if req.Region == "" {
 		writeError(w, http.StatusBadRequest, errors.New("region is required"))
 		return
 	}
+	if req.Mode == "" {
+		req.Mode = "managed"
+	}
+	var existing *domain.CloudFrontConfig
+	var err error
+	existing, err = svc.store.GetCloudFrontConfig()
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeStoreError(w, err)
+		return
+	}
+	if existing == nil {
+		if req.AccessKeyID == "" {
+			writeError(w, http.StatusBadRequest, errors.New("accessKeyId is required"))
+			return
+		}
+		if req.SecretAccessKey == "" {
+			writeError(w, http.StatusBadRequest, errors.New("secretAccessKey is required"))
+			return
+		}
+	} else {
+		accessKeyProvided := strings.TrimSpace(req.AccessKeyID) != ""
+		secretKeyProvided := strings.TrimSpace(req.SecretAccessKey) != ""
+		if accessKeyProvided != secretKeyProvided {
+			writeError(w, http.StatusBadRequest, errors.New("accessKeyId and secretAccessKey must be provided together"))
+			return
+		}
+		if strings.TrimSpace(req.SessionToken) != "" && !accessKeyProvided {
+			writeError(w, http.StatusBadRequest, errors.New("sessionToken must be provided together with accessKeyId and secretAccessKey"))
+			return
+		}
+	}
 
-	encAKID, err := svc.secretCodec.Encrypt(req.AccessKeyID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("encrypt accessKeyId: %w", err))
-		return
+	retainSecrets := existing != nil && req.AccessKeyID == "" && req.SecretAccessKey == "" && req.SessionToken == ""
+	encAKID := ""
+	encSAK := ""
+	encST := ""
+	if !retainSecrets || req.AccessKeyID != "" {
+		encAKID, err = svc.secretCodec.Encrypt(req.AccessKeyID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("encrypt accessKeyId: %w", err))
+			return
+		}
 	}
-	encSAK, err := svc.secretCodec.Encrypt(req.SecretAccessKey)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("encrypt secretAccessKey: %w", err))
-		return
+	if !retainSecrets || req.SecretAccessKey != "" {
+		encSAK, err = svc.secretCodec.Encrypt(req.SecretAccessKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("encrypt secretAccessKey: %w", err))
+			return
+		}
 	}
-	encST, err := svc.secretCodec.Encrypt(req.SessionToken)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("encrypt sessionToken: %w", err))
-		return
+	if !retainSecrets || req.SessionToken != "" {
+		encST, err = svc.secretCodec.Encrypt(req.SessionToken)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("encrypt sessionToken: %w", err))
+			return
+		}
 	}
 
 	if err := svc.store.SaveCloudFrontConfig(store.SaveCloudFrontConfigInput{
@@ -1782,6 +1862,11 @@ func (svc *ControlPlaneService) handleSaveCloudFrontConfig(w http.ResponseWriter
 		EncryptedSecretAccessKey: encSAK,
 		EncryptedSessionToken:    encST,
 		AWSRegion:                req.Region,
+		CustomEntryHost:          strings.TrimSpace(req.CustomEntryHost),
+		Mode:                     strings.TrimSpace(req.Mode),
+		DistributionID:           strings.TrimSpace(req.DistributionID),
+		DistributionDomainName:   strings.TrimSpace(req.DistributionDomainName),
+		RetainExistingSecrets:    retainSecrets,
 		Enabled:                  req.Enabled,
 	}); err != nil {
 		writeStoreError(w, err)
@@ -1790,6 +1875,7 @@ func (svc *ControlPlaneService) handleSaveCloudFrontConfig(w http.ResponseWriter
 
 	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront_config.saved", "cloudfront_config", "cf-global", map[string]any{
 		"region": req.Region,
+		"mode":   req.Mode,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1824,14 +1910,37 @@ func (svc *ControlPlaneService) handleCloudFrontToggle(w http.ResponseWriter, r 
 
 // ── CloudFront operation endpoints ──────────────────────────────────────────
 
-// handleCloudFrontScan discovers origins from the CloudFront distribution.
-// Requires a real AWS client; returns an error if no client is configured.
-func (svc *ControlPlaneService) handleCloudFrontScan(w http.ResponseWriter, r *http.Request) {
-	if svc.cfScanService == nil {
-		writeError(w, http.StatusServiceUnavailable, errors.New("cloudfront scan not available: no AWS client configured"))
+func (svc *ControlPlaneService) handleListCloudFrontDistributions(w http.ResponseWriter, r *http.Request) {
+	client, _, err := svc.newConfiguredCloudFrontClient()
+	if err != nil {
+		writeCloudFrontClientError(w, err)
 		return
 	}
-	result, err := svc.cfScanService.ScanDistribution(r.Context())
+
+	items, err := client.ListDistributions(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	for i := range items {
+		dist, err := client.GetDistribution(r.Context(), items[i].DistributionID)
+		if err != nil {
+			continue
+		}
+		items[i].ManagedResourcesDetected = distributionHasManagedResources(dist)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// handleCloudFrontScan discovers origins from the CloudFront distribution.
+func (svc *ControlPlaneService) handleCloudFrontScan(w http.ResponseWriter, r *http.Request) {
+	client, _, err := svc.newConfiguredCloudFrontClient()
+	if err != nil {
+		writeCloudFrontClientError(w, err)
+		return
+	}
+	scanSvc := cloudfront.NewScanService(svc.store, client)
+	result, err := scanSvc.ScanDistribution(r.Context())
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1845,6 +1954,75 @@ func (svc *ControlPlaneService) handleCloudFrontScan(w http.ResponseWriter, r *h
 
 // handleCloudFrontBind matches platform nodes to discovered CloudFront origins.
 func (svc *ControlPlaneService) handleCloudFrontBind(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DistributionID string `json:"distributionId"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid request body"))
+			return
+		}
+	}
+
+	if strings.TrimSpace(req.DistributionID) != "" {
+		client, cfg, err := svc.newConfiguredCloudFrontClient()
+		if err != nil {
+			writeCloudFrontClientError(w, err)
+			return
+		}
+		scanSvc := cloudfront.NewScanService(svc.store, client)
+		if _, err := scanSvc.ScanDistributionByID(r.Context(), strings.TrimSpace(req.DistributionID), cfg.Mode); err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+	} else {
+		client, cfg, err := svc.newConfiguredCloudFrontClient()
+		if err != nil {
+			writeCloudFrontClientError(w, err)
+			return
+		}
+		if strings.TrimSpace(cfg.DistributionID) == "" && strings.TrimSpace(cfg.Mode) == "managed" {
+			creator, ok := client.(cloudFrontDistributionCreator)
+			if !ok {
+				writeError(w, http.StatusServiceUnavailable, errors.New("cloudfront create is not available"))
+				return
+			}
+			nodes := svc.store.ListNodes()
+			input := cloudfront.CreateDistributionInput{
+				Comment: "Managed by v2ray-platform",
+				Nodes:   make([]cloudfront.CreateDistributionNode, 0, len(nodes)),
+			}
+			for _, node := range nodes {
+				if strings.TrimSpace(node.RouteKey) == "" || strings.TrimSpace(node.PublicHost) == "" {
+					continue
+				}
+				input.Nodes = append(input.Nodes, cloudfront.CreateDistributionNode{
+					NodeID:      node.ID,
+					RouteKey:    node.RouteKey,
+					Host:        node.PublicHost,
+					RewritePath: "/" + node.Name,
+				})
+			}
+			if len(input.Nodes) == 0 {
+				writeError(w, http.StatusBadRequest, errors.New("cannot create cloudfront distribution without routable nodes"))
+				return
+			}
+			created, err := creator.CreateDistribution(r.Context(), input)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+			scanSvc := cloudfront.NewScanService(svc.store, client)
+			if _, err := scanSvc.ScanDistributionByID(r.Context(), created.DistributionID, cfg.Mode); err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+		} else if strings.TrimSpace(cfg.DistributionID) == "" {
+			writeError(w, http.StatusBadRequest, errors.New("distributionId is required unless managed mode creates a new distribution"))
+			return
+		}
+	}
+
 	bindSvc := cloudfront.NewBindService(svc.store)
 	result, err := bindSvc.BindNodes()
 	if err != nil {
@@ -1860,9 +2038,18 @@ func (svc *ControlPlaneService) handleCloudFrontBind(w http.ResponseWriter, r *h
 
 // handleCloudFrontPlan computes the sync plan comparing bindings with AWS origins.
 func (svc *ControlPlaneService) handleCloudFrontPlan(w http.ResponseWriter, r *http.Request) {
-	cfg, err := svc.store.GetCloudFrontConfig()
+	client, cfg, err := svc.newConfiguredCloudFrontClient()
 	if err != nil {
-		writeStoreError(w, err)
+		writeCloudFrontClientError(w, err)
+		return
+	}
+	if strings.TrimSpace(cfg.DistributionID) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("cloudfront distribution is not bound"))
+		return
+	}
+	dist, err := client.GetDistribution(r.Context(), cfg.DistributionID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 
@@ -1875,39 +2062,23 @@ func (svc *ControlPlaneService) handleCloudFrontPlan(w http.ResponseWriter, r *h
 		}
 	}
 
-	// Parse origins
-	var origins []cloudfront.OriginState
-	if cfg.OriginsJSON != "" {
-		var cfOrigins []domain.CloudFrontOrigin
-		if err := json.Unmarshal([]byte(cfg.OriginsJSON), &cfOrigins); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("parse origins: %w", err))
-			return
-		}
-		for _, o := range cfOrigins {
-			origins = append(origins, cloudfront.OriginState{
-				OriginID:   o.OriginID,
-				DomainName: o.Host,
-				PathPrefix: "/" + o.RouteKey,
-			})
-		}
-	}
-
-	// Build node host and route key maps
+	// Build node host map
 	nodes := svc.store.ListNodes()
 	nodeHosts := make(map[string]string, len(nodes))
-	routeKeys := make(map[string]string, len(nodes))
+	nodePaths := make(map[string]string, len(nodes))
 	for _, n := range nodes {
 		nodeHosts[n.ID] = n.PublicHost
-		routeKeys[n.ID] = n.RouteKey
+		nodePaths[n.ID] = "/" + n.Name
 	}
 
-	plan := cloudfront.Plan(bindings, origins, nodeHosts, routeKeys)
+	plan := cloudfront.Plan(bindings, dist, nodeHosts, nodePaths)
 
 	// Persist plan
 	planJSON, _ := json.Marshal(plan.Actions)
 	if err := svc.store.UpdateCloudFrontSyncStatus(store.UpdateCloudFrontSyncInput{
-		PlanJSON:    string(planJSON),
-		DriftStatus: plan.DriftStatus,
+		PlanJSON:           string(planJSON),
+		DriftStatus:        plan.DriftStatus,
+		PreserveSyncStatus: true,
 	}); err != nil {
 		writeStoreError(w, err)
 		return
@@ -1921,19 +2092,22 @@ func (svc *ControlPlaneService) handleCloudFrontPlan(w http.ResponseWriter, r *h
 }
 
 // handleCloudFrontSync executes the sync plan against the CloudFront distribution.
-// Requires a real AWS client; returns an error if no client is configured.
 func (svc *ControlPlaneService) handleCloudFrontSync(w http.ResponseWriter, r *http.Request) {
-	if svc.cfSyncService == nil {
-		writeError(w, http.StatusServiceUnavailable, errors.New("cloudfront sync not available: no AWS client configured"))
-		return
-	}
-
-	// Parse bindings for plan computation
-	cfg, err := svc.store.GetCloudFrontConfig()
+	client, cfg, err := svc.newConfiguredCloudFrontClient()
 	if err != nil {
-		writeStoreError(w, err)
+		writeCloudFrontClientError(w, err)
 		return
 	}
+	if strings.TrimSpace(cfg.DistributionID) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("cloudfront distribution is not bound"))
+		return
+	}
+	dist, err := client.GetDistribution(r.Context(), cfg.DistributionID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	syncSvc := cloudfront.NewSyncService(svc.store, client)
 
 	var bindings []domain.CloudFrontBinding
 	if cfg.BindingsJSON != "" {
@@ -1943,33 +2117,17 @@ func (svc *ControlPlaneService) handleCloudFrontSync(w http.ResponseWriter, r *h
 		}
 	}
 
-	var origins []cloudfront.OriginState
-	if cfg.OriginsJSON != "" {
-		var cfOrigins []domain.CloudFrontOrigin
-		if err := json.Unmarshal([]byte(cfg.OriginsJSON), &cfOrigins); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("parse origins: %w", err))
-			return
-		}
-		for _, o := range cfOrigins {
-			origins = append(origins, cloudfront.OriginState{
-				OriginID:   o.OriginID,
-				DomainName: o.Host,
-				PathPrefix: "/" + o.RouteKey,
-			})
-		}
-	}
-
 	nodes := svc.store.ListNodes()
 	nodeHosts := make(map[string]string, len(nodes))
-	routeKeys := make(map[string]string, len(nodes))
+	nodePaths := make(map[string]string, len(nodes))
 	for _, n := range nodes {
 		nodeHosts[n.ID] = n.PublicHost
-		routeKeys[n.ID] = n.RouteKey
+		nodePaths[n.ID] = "/" + n.Name
 	}
 
-	plan := cloudfront.Plan(bindings, origins, nodeHosts, routeKeys)
+	plan := cloudfront.Plan(bindings, dist, nodeHosts, nodePaths)
 
-	result, err := svc.cfSyncService.ExecutePlan(r.Context(), plan)
+	result, err := syncSvc.ExecutePlan(r.Context(), plan)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1981,6 +2139,120 @@ func (svc *ControlPlaneService) handleCloudFrontSync(w http.ResponseWriter, r *h
 		"sync_status":     result.SyncStatus,
 	})
 	writeJSON(w, http.StatusOK, result)
+}
+
+func cloudFrontDistributionStateFromConfig(cfg *domain.CloudFrontConfig) (*cloudfront.DistributionState, error) {
+	if cfg == nil {
+		return &cloudfront.DistributionState{}, nil
+	}
+
+	dist := &cloudfront.DistributionState{
+		DistributionID: cfg.DistributionID,
+		DomainName:     cfg.DistributionDomainName,
+	}
+	if cfg.OriginsJSON == "" {
+		return dist, nil
+	}
+
+	var cfOrigins []domain.CloudFrontOrigin
+	if err := json.Unmarshal([]byte(cfg.OriginsJSON), &cfOrigins); err != nil {
+		return nil, err
+	}
+
+	seenOrigins := make(map[string]bool, len(cfOrigins))
+	for _, origin := range cfOrigins {
+		if !seenOrigins[origin.OriginID] {
+			dist.Origins = append(dist.Origins, cloudfront.OriginState{
+				OriginID:   origin.OriginID,
+				DomainName: origin.Host,
+			})
+			seenOrigins[origin.OriginID] = true
+		}
+		if strings.TrimSpace(origin.RouteKey) == "" {
+			continue
+		}
+		dist.Behaviors = append(dist.Behaviors, cloudfront.BehaviorState{
+			PathPattern: "/" + origin.RouteKey,
+			OriginID:    origin.OriginID,
+		})
+	}
+
+	return dist, nil
+}
+
+func (svc *ControlPlaneService) newConfiguredCloudFrontClient() (cloudfront.Client, *domain.CloudFrontConfig, error) {
+	cfg, err := svc.store.GetCloudFrontConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+	if cfg == nil {
+		return nil, nil, store.ErrNotFound
+	}
+	if svc.cloudFrontClientFactory != nil {
+		client, err := svc.cloudFrontClientFactory(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		return client, cfg, nil
+	}
+	if svc.secretCodec == nil {
+		return nil, nil, errors.New("CLOUDFRONT_MASTER_KEY not configured")
+	}
+
+	accessKeyID, err := svc.secretCodec.Decrypt(cfg.EncryptedAccessKeyID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decrypt accessKeyId: %w", err)
+	}
+	secretAccessKey, err := svc.secretCodec.Decrypt(cfg.EncryptedSecretAccessKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decrypt secretAccessKey: %w", err)
+	}
+	sessionToken, err := svc.secretCodec.Decrypt(cfg.EncryptedSessionToken)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decrypt sessionToken: %w", err)
+	}
+	if strings.TrimSpace(accessKeyID) == "" || strings.TrimSpace(secretAccessKey) == "" {
+		return nil, nil, errors.New("cloudfront credentials are incomplete")
+	}
+
+	client, err := cloudfront.NewAWSClient(cloudfront.AWSClientConfig{
+		AccessKeyID:     accessKeyID,
+		SecretAccessKey: secretAccessKey,
+		SessionToken:    sessionToken,
+		Region:          cfg.AWSRegion,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return client, cfg, nil
+}
+
+func writeCloudFrontClientError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusBadRequest, errors.New("cloudfront is not configured"))
+	case strings.Contains(err.Error(), "CLOUDFRONT_MASTER_KEY"):
+		writeError(w, http.StatusServiceUnavailable, err)
+	default:
+		writeError(w, http.StatusBadRequest, err)
+	}
+}
+
+func distributionHasManagedResources(dist *cloudfront.DistributionState) bool {
+	if dist == nil {
+		return false
+	}
+	for _, origin := range dist.Origins {
+		if strings.HasPrefix(strings.TrimSpace(origin.OriginID), "v2ray-platform-node-") {
+			return true
+		}
+	}
+	for _, behavior := range dist.Behaviors {
+		if strings.HasPrefix(strings.TrimSpace(behavior.OriginID), "v2ray-platform-node-") {
+			return true
+		}
+	}
+	return false
 }
 
 func withAdmin(cfg config.ControlPlaneConfig, sessions *auth.Manager, next http.HandlerFunc) http.HandlerFunc {

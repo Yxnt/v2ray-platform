@@ -6,90 +6,141 @@ import (
 	"v2ray-platform/internal/domain"
 )
 
-// SyncPlan holds the actions needed to reconcile drift.
+// SyncPlan holds the actions needed to reconcile CloudFront path routing.
 type SyncPlan struct {
-	Actions     []domain.CloudFrontSyncAction
-	DriftStatus string // "in_sync", "drifted", "conflict"
+	Actions       []RouteAction
+	RewriteRoutes []RewriteRoute
+	DriftStatus   string // "in_sync", "drifted", "conflict"
 }
 
-// Plan computes the sync plan by comparing platform bindings with AWS origins.
-// bindings: platform's desired bindings (from cloudfront_configs.bindings_json)
-// origins: current AWS CloudFront origins
-// nodeHosts: map of nodeID -> publicHost (for constructing origin domains)
-// routeKeys: map of nodeID -> routeKey (for constructing origin paths)
-func Plan(bindings []domain.CloudFrontBinding, origins []OriginState, nodeHosts map[string]string, routeKeys map[string]string) *SyncPlan {
-	// Build lookup maps
-	originByRouteKey := make(map[string]OriginState)
-	for _, o := range origins {
-		// Extract route key from path prefix (strip leading "/")
-		key := strings.TrimPrefix(o.PathPrefix, "/")
-		if key != "" {
-			originByRouteKey[key] = o
-		}
-	}
+type routeState struct {
+	RouteKey string
+	OriginID string
+	Host     string
+	Managed  bool
+}
 
-	bindingByRouteKey := make(map[string]domain.CloudFrontBinding)
+// Plan computes the sync plan by comparing platform bindings with the current
+// CloudFront route table reconstructed from origins and cache behaviors.
+func Plan(bindings []domain.CloudFrontBinding, dist *DistributionState, nodeHosts map[string]string, nodePaths map[string]string) *SyncPlan {
+	desiredByRouteKey := make(map[string]domain.CloudFrontBinding, len(bindings))
 	for _, b := range bindings {
-		bindingByRouteKey[b.RouteKey] = b
-	}
-
-	var actions []domain.CloudFrontSyncAction
-	driftStatus := "in_sync"
-
-	// Check each binding: does it have a matching origin?
-	for _, b := range bindings {
-		host := nodeHosts[b.NodeID]
-		if host == "" {
-			// Node has no public host -- skip (will be handled by bind service)
+		if strings.TrimSpace(b.RouteKey) == "" {
 			continue
 		}
-
-		existing, exists := originByRouteKey[b.RouteKey]
-		if !exists {
-			// Origin missing -- need to add
-			actions = append(actions, domain.CloudFrontSyncAction{
-				Action:    "add_origin",
-				OriginID:  b.OriginID,
-				Host:      host,
-				RouteKey:  b.RouteKey,
-				GroupName: b.GroupName,
-				Reason:    "origin missing from distribution",
-			})
-			driftStatus = "drifted"
-		} else if existing.DomainName != host {
-			// Origin exists but host differs -- replace
-			actions = append(actions, domain.CloudFrontSyncAction{
-				Action:    "replace_origin",
-				OriginID:  b.OriginID,
-				Host:      host,
-				RouteKey:  b.RouteKey,
-				GroupName: b.GroupName,
-				Reason:    "origin host mismatch: want " + host + ", have " + existing.DomainName,
-			})
-			driftStatus = "drifted"
-		}
-		// If origin matches -- no action needed
+		desiredByRouteKey[b.RouteKey] = b
 	}
 
-	// Check for extra origins in AWS not in bindings
-	for routeKey, origin := range originByRouteKey {
-		if _, inBindings := bindingByRouteKey[routeKey]; !inBindings {
-			actions = append(actions, domain.CloudFrontSyncAction{
-				Action:   "remove_origin",
-				OriginID: origin.OriginID,
+	originByID := make(map[string]OriginState, len(dist.Origins))
+	for _, origin := range dist.Origins {
+		originByID[origin.OriginID] = origin
+	}
+
+	currentByRouteKey := make(map[string]routeState, len(dist.Behaviors))
+	for _, behavior := range dist.Behaviors {
+		routeKey := strings.TrimPrefix(strings.TrimSpace(behavior.PathPattern), "/")
+		if routeKey == "" {
+			continue
+		}
+		origin := originByID[behavior.OriginID]
+		currentByRouteKey[routeKey] = routeState{
+			RouteKey: routeKey,
+			OriginID: behavior.OriginID,
+			Host:     origin.DomainName,
+			Managed:  isManagedOriginID(behavior.OriginID),
+		}
+	}
+
+	actions := make([]RouteAction, 0)
+	rewrites := make([]RewriteRoute, 0, len(desiredByRouteKey))
+	driftStatus := "in_sync"
+
+	for routeKey, binding := range desiredByRouteKey {
+		host := strings.TrimSpace(nodeHosts[binding.NodeID])
+		if host == "" {
+			actions = append(actions, RouteAction{
+				Action:    "conflict",
+				RouteKey:  routeKey,
+				OriginID:  binding.OriginID,
+				GroupName: binding.GroupName,
+				Reason:    "node public_host is required for cloudfront origin",
+			})
+			driftStatus = "conflict"
+			continue
+		}
+		rewritePath := strings.TrimSpace(nodePaths[binding.NodeID])
+		if rewritePath == "" {
+			rewritePath = "/" + strings.TrimSpace(binding.GroupName)
+		}
+		if rewritePath != "" && !strings.HasPrefix(rewritePath, "/") {
+			rewritePath = "/" + rewritePath
+		}
+		if rewritePath != "" && rewritePath != "/" {
+			rewrites = append(rewrites, RewriteRoute{
 				RouteKey: routeKey,
-				Reason:   "origin exists in distribution but not in platform bindings",
+				Path:     rewritePath,
+			})
+		}
+
+		current, exists := currentByRouteKey[routeKey]
+		switch {
+		case !exists:
+			actions = append(actions, RouteAction{
+				Action:    "add_route",
+				RouteKey:  routeKey,
+				OriginID:  binding.OriginID,
+				Host:      host,
+				GroupName: binding.GroupName,
+				Reason:    "route missing from distribution",
+			})
+			driftStatus = "drifted"
+		case !current.Managed:
+			actions = append(actions, RouteAction{
+				Action:    "conflict",
+				RouteKey:  routeKey,
+				OriginID:  current.OriginID,
+				Host:      current.Host,
+				GroupName: binding.GroupName,
+				Reason:    "route is occupied by an unmanaged origin",
+			})
+			driftStatus = "conflict"
+		case current.OriginID != binding.OriginID || current.Host != host:
+			actions = append(actions, RouteAction{
+				Action:    "replace_route",
+				RouteKey:  routeKey,
+				OriginID:  binding.OriginID,
+				Host:      host,
+				GroupName: binding.GroupName,
+				Reason:    "route target differs from platform binding",
 			})
 			driftStatus = "drifted"
 		}
+	}
+
+	for routeKey, current := range currentByRouteKey {
+		if _, ok := desiredByRouteKey[routeKey]; ok {
+			continue
+		}
+		if !current.Managed {
+			continue
+		}
+		actions = append(actions, RouteAction{
+			Action:   "remove_route",
+			RouteKey: routeKey,
+			OriginID: current.OriginID,
+			Host:     current.Host,
+			Reason:   "route exists in distribution but not in platform bindings",
+		})
+		driftStatus = "drifted"
 	}
 
 	if len(actions) == 0 {
-		actions = []domain.CloudFrontSyncAction{{Action: "noop", Reason: "distribution is in sync"}}
+		actions = []RouteAction{{Action: "noop", Reason: "distribution is in sync"}}
 	}
 
 	return &SyncPlan{
-		Actions:     actions,
-		DriftStatus: driftStatus,
+		Actions:       actions,
+		RewriteRoutes: rewrites,
+		DriftStatus:   driftStatus,
 	}
 }

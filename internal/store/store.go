@@ -41,6 +41,11 @@ type SaveCloudFrontConfigInput struct {
 	EncryptedSecretAccessKey string
 	EncryptedSessionToken    string
 	AWSRegion                string
+	CustomEntryHost          string
+	Mode                     string
+	DistributionID           string
+	DistributionDomainName   string
+	RetainExistingSecrets    bool
 	Enabled                  *bool // nil = leave unchanged
 }
 
@@ -54,6 +59,7 @@ type UpdateCloudFrontSyncInput struct {
 	SyncStatus             string
 	DriftStatus            string
 	LastSyncError          string
+	PreserveSyncStatus     bool
 }
 
 type Store interface {

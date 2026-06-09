@@ -1,14 +1,19 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"v2ray-platform/internal/auth"
+	"v2ray-platform/internal/cloudfront"
 	"v2ray-platform/internal/config"
+	"v2ray-platform/internal/crypto"
 	"v2ray-platform/internal/domain"
 	"v2ray-platform/internal/store"
 )
@@ -114,4 +119,840 @@ func TestStatelessMemoryModeLogoutAllReturnsSuccess(t *testing.T) {
 	if payload["warning"] == "" {
 		t.Fatalf("expected warning in payload, got %+v", payload)
 	}
+}
+
+func TestPublicCloudFrontSubscriptionRequiresSuccessfulSync(t *testing.T) {
+	st := store.NewMemoryStore()
+	token := seedCloudFrontSubscriptionFixture(t, st)
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{}, svc, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/sub/"+token+"/clash-cf.yaml", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 when cloudfront has not synced successfully, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPublicCloudFrontSubscriptionUsesEntryHostAndRouteKey(t *testing.T) {
+	st := store.NewMemoryStore()
+	token := seedCloudFrontSubscriptionFixture(t, st)
+	if err := st.UpdateCloudFrontSyncStatus(store.UpdateCloudFrontSyncInput{
+		SyncStatus:    "synced",
+		DriftStatus:   "in_sync",
+		LastSyncError: "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{}, svc, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/sub/"+token+"/clash-cf.yaml", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `server: "edge.example.com"`) {
+		t.Fatalf("expected custom entry host in YAML, got %s", body)
+	}
+	if !strings.Contains(body, `path: "/`) {
+		t.Fatalf("expected route key path in YAML, got %s", body)
+	}
+	if !strings.Contains(body, "    port: 443\n") {
+		t.Fatalf("expected CloudFront YAML to use TLS port 443, got %s", body)
+	}
+	if !strings.Contains(body, "    tls: true\n") {
+		t.Fatalf("expected CloudFront YAML to enable TLS, got %s", body)
+	}
+	if strings.Contains(body, `server: "node-1.example.com"`) {
+		t.Fatalf("expected CloudFront YAML not to fall back to direct host: %s", body)
+	}
+}
+
+func TestPublicCloudFrontSubscriptionRequiresResyncAfterBindingsChange(t *testing.T) {
+	st := store.NewMemoryStore()
+	token := seedCloudFrontSubscriptionFixture(t, st)
+	if err := st.UpdateCloudFrontBindings(`[{"nodeId":"node-1","routeKey":"rk1"}]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateCloudFrontSyncStatus(store.UpdateCloudFrontSyncInput{
+		SyncStatus:    "synced",
+		DriftStatus:   "in_sync",
+		LastSyncError: "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateCloudFrontBindings(`[{"nodeId":"node-1","routeKey":"rk1"},{"nodeId":"node-2","routeKey":"rk2"}]`); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{}, svc, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/sub/"+token+"/clash-cf.yaml", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 after bindings changed without resync, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "first successful sync") {
+		t.Fatalf("expected resync error, got %s", rec.Body.String())
+	}
+}
+
+func TestPublicCloudFrontSubscriptionUnavailableWhenDriftDetected(t *testing.T) {
+	st := store.NewMemoryStore()
+	token := seedCloudFrontSubscriptionFixture(t, st)
+	if err := st.UpdateCloudFrontSyncStatus(store.UpdateCloudFrontSyncInput{
+		SyncStatus:    "synced",
+		DriftStatus:   "in_sync",
+		LastSyncError: "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateCloudFrontSyncStatus(store.UpdateCloudFrontSyncInput{
+		PlanJSON:           `[{"action":"replace_route"}]`,
+		DriftStatus:        "drifted",
+		PreserveSyncStatus: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{}, svc, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/sub/"+token+"/clash-cf.yaml", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 when drift is detected, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "drift") {
+		t.Fatalf("expected drift error, got %s", rec.Body.String())
+	}
+}
+
+type mockControlPlaneCloudFrontClient struct {
+	distributions         []cloudfront.DistributionSummary
+	distribution          *cloudfront.DistributionState
+	createdDistribution   *cloudfront.DistributionState
+	listErr               error
+	getErr                error
+	applyErr              error
+	createErr             error
+	lastGetDistributionID string
+	lastCreateInput       cloudfront.CreateDistributionInput
+	applyCalls            int
+	lastApplyActions      []cloudfront.RouteAction
+	lastApplyRewrites     []cloudfront.RewriteRoute
+}
+
+func (m *mockControlPlaneCloudFrontClient) ListDistributions(_ context.Context) ([]cloudfront.DistributionSummary, error) {
+	return m.distributions, m.listErr
+}
+
+func (m *mockControlPlaneCloudFrontClient) GetDistribution(_ context.Context, distributionID string) (*cloudfront.DistributionState, error) {
+	m.lastGetDistributionID = distributionID
+	return m.distribution, m.getErr
+}
+
+func (m *mockControlPlaneCloudFrontClient) ApplyDistributionRoutes(_ context.Context, _ string, actions []cloudfront.RouteAction, rewrites []cloudfront.RewriteRoute) error {
+	m.applyCalls++
+	m.lastApplyActions = actions
+	m.lastApplyRewrites = rewrites
+	if m.applyErr != nil {
+		return m.applyErr
+	}
+	return nil
+}
+
+func (m *mockControlPlaneCloudFrontClient) CreateDistribution(_ context.Context, input cloudfront.CreateDistributionInput) (*cloudfront.DistributionState, error) {
+	m.lastCreateInput = input
+	return m.createdDistribution, m.createErr
+}
+
+func TestListCloudFrontDistributions(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	seedEncryptedCloudFrontConfig(t, st, codec)
+
+	mockClient := &mockControlPlaneCloudFrontClient{
+		distributions: []cloudfront.DistributionSummary{
+			{DistributionID: "E1234", DomainName: "d1234.cloudfront.net", Status: "Deployed"},
+		},
+		distribution: &cloudfront.DistributionState{
+			DistributionID: "E1234",
+			DomainName:     "d1234.cloudfront.net",
+			Origins: []cloudfront.OriginState{
+				{OriginID: "v2ray-platform-node-node-1", DomainName: "node-1.example.com"},
+			},
+			Behaviors: []cloudfront.BehaviorState{
+				{PathPattern: "/rk123", OriginID: "v2ray-platform-node-node-1"},
+			},
+		},
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	svc.cloudFrontClientFactory = func(*domain.CloudFrontConfig) (cloudfront.Client, error) {
+		return mockClient, nil
+	}
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/cloudfront/distributions", nil)
+	req.Header.Set("X-Admin-Token", "admin-token")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		Items []cloudfront.DistributionSummary `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].DistributionID != "E1234" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+	if !payload.Items[0].ManagedResourcesDetected {
+		t.Fatalf("expected managed resources flag, got %+v", payload.Items[0])
+	}
+}
+
+func TestCloudFrontConfigSaveEncryptsAndMasksSecrets(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	saveBody := bytes.NewBufferString(`{
+		"accessKeyId":"AKIATEST1234567890",
+		"secretAccessKey":"super-secret-value",
+		"sessionToken":"session-secret-value",
+		"region":"us-east-1",
+		"enabled":true
+	}`)
+	saveReq := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/config", saveBody)
+	saveReq.Header.Set("X-Admin-Token", "admin-token")
+	saveReq.Header.Set("Content-Type", "application/json")
+	saveRec := httptest.NewRecorder()
+
+	router.ServeHTTP(saveRec, saveReq)
+
+	if saveRec.Code != http.StatusOK {
+		t.Fatalf("expected save 200, got %d body=%s", saveRec.Code, saveRec.Body.String())
+	}
+	cfg, err := st.GetCloudFrontConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EncryptedAccessKeyID == "AKIATEST1234567890" || cfg.EncryptedSecretAccessKey == "super-secret-value" || cfg.EncryptedSessionToken == "session-secret-value" {
+		t.Fatalf("expected stored credentials to be encrypted, got %+v", cfg)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/admin/cloudfront/config", nil)
+	getReq.Header.Set("X-Admin-Token", "admin-token")
+	getRec := httptest.NewRecorder()
+
+	router.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected get 200, got %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	body := getRec.Body.String()
+	if !strings.Contains(body, `"accessKeyId":"****7890"`) {
+		t.Fatalf("expected masked access key, got %s", body)
+	}
+	if strings.Contains(body, "AKIATEST1234567890") || strings.Contains(body, "super-secret-value") || strings.Contains(body, "session-secret-value") {
+		t.Fatalf("expected config response not to leak plaintext credentials, got %s", body)
+	}
+}
+
+func TestCloudFrontConfigRejectsPartialCredentialUpdate(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	seedEncryptedCloudFrontConfig(t, st, codec)
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/config", bytes.NewBufferString(`{
+		"accessKeyId":"AKIANEW1234567890",
+		"region":"us-east-1"
+	}`))
+	req.Header.Set("X-Admin-Token", "admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected partial credential update to fail with 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	cfg, err := st.GetCloudFrontConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessKey, err := codec.Decrypt(cfg.EncryptedAccessKeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretKey, err := codec.Decrypt(cfg.EncryptedSecretAccessKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accessKey != "AKIATEST123456789" || secretKey != "secret-value" {
+		t.Fatalf("expected stored credentials to remain unchanged, got access=%q secret=%q", accessKey, secretKey)
+	}
+}
+
+func TestCloudFrontConfigRejectsSessionTokenOnlyCredentialUpdate(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	seedEncryptedCloudFrontConfig(t, st, codec)
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/config", bytes.NewBufferString(`{
+		"sessionToken":"new-session-token",
+		"region":"us-east-1"
+	}`))
+	req.Header.Set("X-Admin-Token", "admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected sessionToken-only credential update to fail with 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	cfg, err := st.GetCloudFrontConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessKey, err := codec.Decrypt(cfg.EncryptedAccessKeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretKey, err := codec.Decrypt(cfg.EncryptedSecretAccessKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accessKey != "AKIATEST123456789" || secretKey != "secret-value" {
+		t.Fatalf("expected stored credentials to remain unchanged, got access=%q secret=%q", accessKey, secretKey)
+	}
+}
+
+func TestCloudFrontConfigRequiresMasterKey(t *testing.T) {
+	st := store.NewMemoryStore()
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/cloudfront/config", nil)
+	req.Header.Set("X-Admin-Token", "admin-token")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 without master key, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "CLOUDFRONT_MASTER_KEY") {
+		t.Fatalf("expected explicit master key error, got %s", rec.Body.String())
+	}
+}
+
+func TestCloudFrontBindScansSelectedDistribution(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	seedEncryptedCloudFrontConfig(t, st, codec)
+
+	_, plainToken, err := st.CreateBootstrapToken(store.CreateBootstrapTokenInput{
+		Description: "node-1",
+		TTLHours:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := st.RegisterNode(store.RegisterNodeInput{
+		BootstrapToken: plainToken,
+		Name:           "node-1",
+		Region:         "ap-southeast-1",
+		PublicHost:     "node-1.example.com",
+		RuntimeFlavor:  "v2ray",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := st.ListNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	routeKey := nodes[0].RouteKey
+
+	mockClient := &mockControlPlaneCloudFrontClient{
+		distribution: &cloudfront.DistributionState{
+			DistributionID: "E1234",
+			DomainName:     "d1234.cloudfront.net",
+			Origins: []cloudfront.OriginState{
+				{OriginID: "origin-remote", DomainName: "node-1.example.com"},
+			},
+			Behaviors: []cloudfront.BehaviorState{
+				{PathPattern: "/" + routeKey, OriginID: "origin-remote"},
+			},
+		},
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	svc.cloudFrontClientFactory = func(*domain.CloudFrontConfig) (cloudfront.Client, error) {
+		return mockClient, nil
+	}
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	body := bytes.NewBufferString(`{"distributionId":"E1234"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/bind", body)
+	req.Header.Set("X-Admin-Token", "admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if mockClient.lastGetDistributionID != "E1234" {
+		t.Fatalf("expected bind flow to scan selected distribution, got %q", mockClient.lastGetDistributionID)
+	}
+
+	cfg, err := st.GetCloudFrontConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DistributionID != "E1234" || cfg.DistributionDomainName != "d1234.cloudfront.net" {
+		t.Fatalf("expected distribution to be persisted, got %+v", cfg)
+	}
+	if !strings.Contains(cfg.OriginsJSON, "origin-remote") {
+		t.Fatalf("expected scanned origins to be persisted, got %s", cfg.OriginsJSON)
+	}
+	if !strings.Contains(cfg.BindingsJSON, "v2ray-platform-node-"+reg.NodeID) {
+		t.Fatalf("expected bindings to keep managed placeholder, got %s", cfg.BindingsJSON)
+	}
+	if reg.NodeID == "" {
+		t.Fatal("expected register output to include node id")
+	}
+}
+
+func TestCloudFrontBindCreatesManagedDistributionWhenNoneSelected(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	seedEncryptedCloudFrontConfig(t, st, codec)
+
+	_, plainToken, err := st.CreateBootstrapToken(store.CreateBootstrapTokenInput{
+		Description: "node-1",
+		TTLHours:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := st.RegisterNode(store.RegisterNodeInput{
+		BootstrapToken: plainToken,
+		Name:           "node-1",
+		Region:         "ap-southeast-1",
+		PublicHost:     "node-1.example.com",
+		RuntimeFlavor:  "v2ray",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := st.ListNodes()
+	routeKey := nodes[0].RouteKey
+
+	mockClient := &mockControlPlaneCloudFrontClient{
+		createdDistribution: &cloudfront.DistributionState{
+			DistributionID: "ENEW123",
+			DomainName:     "dnew123.cloudfront.net",
+		},
+		distribution: &cloudfront.DistributionState{
+			DistributionID: "ENEW123",
+			DomainName:     "dnew123.cloudfront.net",
+			Origins: []cloudfront.OriginState{
+				{OriginID: "v2ray-platform-node-" + reg.NodeID, DomainName: "node-1.example.com"},
+			},
+			Behaviors: []cloudfront.BehaviorState{
+				{PathPattern: "/" + routeKey, OriginID: "v2ray-platform-node-" + reg.NodeID},
+			},
+		},
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	svc.cloudFrontClientFactory = func(*domain.CloudFrontConfig) (cloudfront.Client, error) {
+		return mockClient, nil
+	}
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/bind", bytes.NewBufferString(`{}`))
+	req.Header.Set("X-Admin-Token", "admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if mockClient.lastCreateInput.Comment == "" || len(mockClient.lastCreateInput.Nodes) != 1 {
+		t.Fatalf("expected create distribution input to include one node, got %+v", mockClient.lastCreateInput)
+	}
+	cfg, err := st.GetCloudFrontConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DistributionID != "ENEW123" || cfg.DistributionDomainName != "dnew123.cloudfront.net" {
+		t.Fatalf("expected created distribution persisted, got %+v", cfg)
+	}
+}
+
+func TestCloudFrontBindRequiresDistributionWhenNotManagedCreate(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	seedEncryptedCloudFrontConfig(t, st, codec)
+	if err := st.SaveCloudFrontConfig(store.SaveCloudFrontConfigInput{
+		AWSRegion:             "us-east-1",
+		Mode:                  "adopted",
+		RetainExistingSecrets: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	svc.cloudFrontClientFactory = func(*domain.CloudFrontConfig) (cloudfront.Client, error) {
+		return &mockControlPlaneCloudFrontClient{}, nil
+	}
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/bind", bytes.NewBufferString(`{}`))
+	req.Header.Set("X-Admin-Token", "admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when adopted mode has no selected distribution, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	cfg, err := st.GetCloudFrontConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(cfg.BindingsJSON) != "" {
+		t.Fatalf("expected bind to leave bindings untouched, got %s", cfg.BindingsJSON)
+	}
+}
+
+func TestCloudFrontAdminUIAllowsManagedCreateWithoutSelectedDistribution(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`id="cf-bind-btn">Bind / Create`,
+		`leaving this empty creates a new platform-managed distribution`,
+		`No distribution selected in Managed mode; creating a new distribution`,
+		`JSON.stringify(selectedID ? { distributionId: selectedID } : {})`,
+		`Managed distribution created and bound`,
+		`!['drifted', 'conflict'].includes(cfg.driftStatus)`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront UI to contain %q", needle)
+		}
+	}
+}
+
+func TestCloudFrontPlanReadsLiveDistributionState(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	routeKey := seedCloudFrontSyncFixture(t, st, codec)
+
+	mockClient := &mockControlPlaneCloudFrontClient{
+		distribution: &cloudfront.DistributionState{
+			DistributionID: "E1234",
+			DomainName:     "d1234.cloudfront.net",
+			Origins: []cloudfront.OriginState{
+				{OriginID: "custom-origin", DomainName: "custom.example.com"},
+			},
+			Behaviors: []cloudfront.BehaviorState{
+				{PathPattern: "/" + routeKey, OriginID: "custom-origin"},
+			},
+		},
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	svc.cloudFrontClientFactory = func(*domain.CloudFrontConfig) (cloudfront.Client, error) {
+		return mockClient, nil
+	}
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/plan", nil)
+	req.Header.Set("X-Admin-Token", "admin-token")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if mockClient.lastGetDistributionID != "E1234" {
+		t.Fatalf("expected plan to read live distribution, got %q", mockClient.lastGetDistributionID)
+	}
+	var payload cloudfront.SyncPlan
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.DriftStatus != "conflict" {
+		t.Fatalf("expected live unmanaged conflict, got %+v", payload)
+	}
+}
+
+func TestCloudFrontSyncReadsLiveDistributionAndBlocksUnmanagedConflict(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	routeKey := seedCloudFrontSyncFixture(t, st, codec)
+
+	mockClient := &mockControlPlaneCloudFrontClient{
+		distribution: &cloudfront.DistributionState{
+			DistributionID: "E1234",
+			DomainName:     "d1234.cloudfront.net",
+			Origins: []cloudfront.OriginState{
+				{OriginID: "custom-origin", DomainName: "custom.example.com"},
+			},
+			Behaviors: []cloudfront.BehaviorState{
+				{PathPattern: "/" + routeKey, OriginID: "custom-origin"},
+			},
+		},
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	svc.cloudFrontClientFactory = func(*domain.CloudFrontConfig) (cloudfront.Client, error) {
+		return mockClient, nil
+	}
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/sync", nil)
+	req.Header.Set("X-Admin-Token", "admin-token")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if mockClient.lastGetDistributionID != "E1234" {
+		t.Fatalf("expected sync to read live distribution, got %q", mockClient.lastGetDistributionID)
+	}
+	if mockClient.applyCalls != 0 {
+		t.Fatalf("expected sync conflict to stop before AWS mutation, apply calls=%d actions=%+v", mockClient.applyCalls, mockClient.lastApplyActions)
+	}
+	var payload cloudfront.SyncResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.DriftStatus != "conflict" || payload.SyncStatus != "failed" {
+		t.Fatalf("expected failed conflict result, got %+v", payload)
+	}
+}
+
+func TestCloudFrontSyncEnsuresRewriteRoutesWhenDistributionIsInSync(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	routeKey := seedCloudFrontSyncFixture(t, st, codec)
+
+	nodes := st.ListNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	originID := "v2ray-platform-node-" + nodes[0].ID
+	mockClient := &mockControlPlaneCloudFrontClient{
+		distribution: &cloudfront.DistributionState{
+			DistributionID: "E1234",
+			DomainName:     "d1234.cloudfront.net",
+			Origins: []cloudfront.OriginState{
+				{OriginID: originID, DomainName: "node-1.example.com"},
+			},
+			Behaviors: []cloudfront.BehaviorState{
+				{PathPattern: "/" + routeKey, OriginID: originID},
+			},
+		},
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	svc.cloudFrontClientFactory = func(*domain.CloudFrontConfig) (cloudfront.Client, error) {
+		return mockClient, nil
+	}
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/sync", nil)
+	req.Header.Set("X-Admin-Token", "admin-token")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if mockClient.applyCalls != 1 {
+		t.Fatalf("expected sync to ensure rewrite function, apply calls=%d", mockClient.applyCalls)
+	}
+	if len(mockClient.lastApplyActions) != 0 {
+		t.Fatalf("expected no route mutations, got %+v", mockClient.lastApplyActions)
+	}
+	if len(mockClient.lastApplyRewrites) != 1 || mockClient.lastApplyRewrites[0].RouteKey != routeKey || mockClient.lastApplyRewrites[0].Path != "/node-1" {
+		t.Fatalf("expected route rewrite for current node path, got %+v", mockClient.lastApplyRewrites)
+	}
+}
+
+func newCloudFrontTestCodec(t *testing.T) *crypto.SecretCodec {
+	t.Helper()
+	codec, err := crypto.NewSecretCodec([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return codec
+}
+
+func seedEncryptedCloudFrontConfig(t *testing.T, st *store.MemoryStore, codec *crypto.SecretCodec) {
+	t.Helper()
+	encAK, err := codec.Encrypt("AKIATEST123456789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encSK, err := codec.Encrypt("secret-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	if err := st.SaveCloudFrontConfig(store.SaveCloudFrontConfigInput{
+		EncryptedAccessKeyID:     encAK,
+		EncryptedSecretAccessKey: encSK,
+		AWSRegion:                "us-east-1",
+		Mode:                     "managed",
+		Enabled:                  &enabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedCloudFrontSyncFixture(t *testing.T, st *store.MemoryStore, codec *crypto.SecretCodec) string {
+	t.Helper()
+	_, plainToken, err := st.CreateBootstrapToken(store.CreateBootstrapTokenInput{
+		Description: "node-1",
+		TTLHours:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := st.RegisterNode(store.RegisterNodeInput{
+		BootstrapToken: plainToken,
+		Name:           "node-1",
+		Region:         "ap-southeast-1",
+		PublicHost:     "node-1.example.com",
+		RuntimeFlavor:  "v2ray",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := st.ListNodes()
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(nodes))
+	}
+	routeKey := nodes[0].RouteKey
+	enabled := true
+	encAK, err := codec.Encrypt("AKIATEST123456789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encSK, err := codec.Encrypt("secret-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveCloudFrontConfig(store.SaveCloudFrontConfigInput{
+		EncryptedAccessKeyID:     encAK,
+		EncryptedSecretAccessKey: encSK,
+		AWSRegion:                "us-east-1",
+		DistributionID:           "E1234",
+		DistributionDomainName:   "d1234.cloudfront.net",
+		Mode:                     "managed",
+		Enabled:                  &enabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bindings := []domain.CloudFrontBinding{
+		{NodeID: reg.NodeID, OriginID: "v2ray-platform-node-" + reg.NodeID, RouteKey: routeKey, GroupName: "node-1"},
+	}
+	bindingsJSON, err := json.Marshal(bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateCloudFrontBindings(string(bindingsJSON)); err != nil {
+		t.Fatal(err)
+	}
+	return routeKey
+}
+
+func seedCloudFrontSubscriptionFixture(t *testing.T, st *store.MemoryStore) string {
+	t.Helper()
+	_, plainToken, err := st.CreateBootstrapToken(store.CreateBootstrapTokenInput{
+		Description: "node-1",
+		TTLHours:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := st.RegisterNode(store.RegisterNodeInput{
+		BootstrapToken: plainToken,
+		Name:           "node-1",
+		Region:         "ap-southeast-1",
+		PublicHost:     "node-1.example.com",
+		RuntimeFlavor:  "v2ray",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := st.CreateMember(store.CreateMemberInput{
+		Name:  "Alice",
+		Email: "alice@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.CreateGrant(store.CreateGrantInput{NodeID: reg.NodeID, MemberID: member.ID}); err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	if err := st.SaveCloudFrontConfig(store.SaveCloudFrontConfigInput{
+		EncryptedAccessKeyID:     "enc-ak",
+		EncryptedSecretAccessKey: "enc-sk",
+		AWSRegion:                "us-east-1",
+		CustomEntryHost:          "edge.example.com",
+		DistributionID:           "E1234",
+		DistributionDomainName:   "d123.cloudfront.net",
+		Mode:                     "managed",
+		Enabled:                  &enabled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return member.SubscriptionToken
 }

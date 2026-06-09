@@ -12,11 +12,15 @@ type mockScanClient struct {
 	err   error
 }
 
+func (m *mockScanClient) ListDistributions(ctx context.Context) ([]DistributionSummary, error) {
+	return nil, m.err
+}
+
 func (m *mockScanClient) GetDistribution(ctx context.Context, id string) (*DistributionState, error) {
 	return m.state, m.err
 }
 
-func (m *mockScanClient) UpdateOrigins(ctx context.Context, id string, toAdd []OriginState, toRemove []string, toUpdate []OriginState) error {
+func (m *mockScanClient) ApplyDistributionRoutes(ctx context.Context, id string, actions []RouteAction, rewrites []RewriteRoute) error {
 	return nil
 }
 
@@ -33,8 +37,9 @@ func TestScanDistributionSuccess(t *testing.T) {
 			DistributionID: "E1234",
 			DomainName:     "d1234.cloudfront.net",
 			Origins: []OriginState{
-				{OriginID: "origin-1", DomainName: "node1.example.com", PathPrefix: "/key1234"},
+				{OriginID: "origin-1", DomainName: "node1.example.com"},
 			},
+			Behaviors: []BehaviorState{{PathPattern: "/key1234", OriginID: "origin-1"}},
 		},
 	}
 
@@ -129,9 +134,14 @@ func TestScanDistributionMultipleOrigins(t *testing.T) {
 			DistributionID: "E5678",
 			DomainName:     "d5678.cloudfront.net",
 			Origins: []OriginState{
-				{OriginID: "origin-1", DomainName: "node1.example.com", PathPrefix: "/aaa111"},
-				{OriginID: "origin-2", DomainName: "node2.example.com", PathPrefix: "/bbb222"},
-				{OriginID: "origin-3", DomainName: "node3.example.com", PathPrefix: "/ccc333"},
+				{OriginID: "origin-1", DomainName: "node1.example.com"},
+				{OriginID: "origin-2", DomainName: "node2.example.com"},
+				{OriginID: "origin-3", DomainName: "node3.example.com"},
+			},
+			Behaviors: []BehaviorState{
+				{PathPattern: "/aaa111", OriginID: "origin-1"},
+				{PathPattern: "/bbb222", OriginID: "origin-2"},
+				{PathPattern: "/ccc333", OriginID: "origin-3"},
 			},
 		},
 	}
@@ -152,7 +162,7 @@ func TestScanDistributionMultipleOrigins(t *testing.T) {
 	}
 }
 
-func TestScanDistributionRootPathPrefix(t *testing.T) {
+func TestScanDistributionIgnoresRootBehavior(t *testing.T) {
 	memStore := store.NewMemoryStore()
 	memStore.SaveCloudFrontConfig(store.SaveCloudFrontConfigInput{
 		EncryptedAccessKeyID: "test",
@@ -165,8 +175,9 @@ func TestScanDistributionRootPathPrefix(t *testing.T) {
 			DistributionID: "E1234",
 			DomainName:     "d1234.cloudfront.net",
 			Origins: []OriginState{
-				{OriginID: "default-origin", DomainName: "default.example.com", PathPrefix: "/"},
+				{OriginID: "default-origin", DomainName: "default.example.com"},
 			},
+			Behaviors: []BehaviorState{{PathPattern: "/", OriginID: "default-origin"}},
 		},
 	}
 
@@ -175,7 +186,7 @@ func TestScanDistributionRootPathPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Origins[0].RouteKey != "" {
-		t.Fatalf("expected empty routeKey for root path, got '%s'", result.Origins[0].RouteKey)
+	if len(result.Origins) != 0 {
+		t.Fatalf("expected root behavior to be ignored, got %+v", result.Origins)
 	}
 }

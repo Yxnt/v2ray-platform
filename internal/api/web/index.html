@@ -844,8 +844,9 @@
           <input type="checkbox" id="cf-enabled-toggle" style="accent-color:var(--green)">
           <span>Enable</span>
         </label>
+        <button class="btn btn-secondary btn-sm" id="cf-discover-btn">List Distributions</button>
         <button class="btn btn-secondary btn-sm" id="cf-scan-btn">Scan AWS</button>
-        <button class="btn btn-secondary btn-sm" id="cf-bind-btn">Bind Origins</button>
+        <button class="btn btn-secondary btn-sm" id="cf-bind-btn">Bind / Create</button>
         <button class="btn btn-secondary btn-sm" id="cf-plan-btn">Compute Drift</button>
         <button class="btn btn-primary btn-sm" id="cf-sync-btn">Sync</button>
         <button class="btn btn-ghost btn-sm" id="cf-refresh-status-btn">Refresh</button>
@@ -871,6 +872,34 @@
       <div class="field">
         <label for="cf-region">Region</label>
         <input id="cf-region" placeholder="us-east-1" value="us-east-1">
+      </div>
+      <div class="field">
+        <label for="cf-custom-entry-host">Custom Entry Host <span style="color:var(--text-muted);font-size:11px">(optional)</span></label>
+        <input id="cf-custom-entry-host" placeholder="edge.example.com">
+      </div>
+      <div class="field">
+        <label for="cf-mode">Mode</label>
+        <select id="cf-mode">
+          <option value="managed">Managed</option>
+          <option value="adopted">Adopted</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="cf-distribution-select">Discovered Distributions</label>
+        <select id="cf-distribution-select">
+          <option value="">Load distributions first</option>
+        </select>
+        <div style="color:var(--text-muted);font-size:12px;margin-top:6px">
+          Select a discovered distribution to bind it. In Managed mode, leaving this empty creates a new platform-managed distribution.
+        </div>
+      </div>
+      <div class="field">
+        <label for="cf-distribution-id">Bound Distribution ID</label>
+        <input id="cf-distribution-id" placeholder="E1234567890ABC" readonly>
+      </div>
+      <div class="field">
+        <label for="cf-distribution-domain">Bound Distribution Domain</label>
+        <input id="cf-distribution-domain" placeholder="d1234.cloudfront.net" readonly>
       </div>
       <div style="display:flex;gap:8px;margin-top:16px">
         <button class="btn btn-primary" id="cf-save-btn">Save credentials</button>
@@ -916,6 +945,37 @@
     };
 
     let refreshTimer = 0;
+    let cloudFrontDistributions = [];
+    let cloudFrontReady = false;
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderMembers(members, tierMap = (window.__tierMap || {})) {
+      els.membersBody.innerHTML = '';
+      window.__membersCache = members;
+      for (const member of members) {
+        const badge = `<span class="badge badge-${member.status || 'active'}">${member.status || 'active'}</span>`;
+        const expires = member.expires_at ? new Date(member.expires_at).toLocaleDateString() : '—';
+        const quotaGB = member.quota_bytes_limit > 0 ? (member.quota_bytes_limit / 1e9).toFixed(0) : '—';
+        const tierLabel = member.tier_id && tierMap[member.tier_id] ? tierMap[member.tier_id].name : '—';
+        const isSuspended = member.status === 'suspended';
+        const toggleLabel = isSuspended ? 'Activate' : 'Suspend';
+        const toggleStatus = isSuspended ? 'active' : 'suspended';
+        const subToken = member.subscription_token || '';
+        const row = document.createElement('tr');
+        const cfDisabled = cloudFrontReady ? '' : 'disabled';
+        const cfTitle = cloudFrontReady ? 'Copy CloudFront subscription URL' : 'CloudFront subscription becomes available after the first successful sync';
+        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${tierLabel}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}" data-member-tier="${member.tier_id||''}" data-member-quota="${member.quota_bytes_limit||0}">Edit</button><button class="btn btn-secondary btn-xs" data-member-clash="${member.id}" data-member-name="${encodeURIComponent(member.name)}">Clash↓</button><button class="btn btn-secondary btn-xs" data-member-clash-cf="${member.id}" data-member-name="${encodeURIComponent(member.name)}" ${cfDisabled} title="${cfTitle}">CF↓</button><button class="btn btn-secondary btn-xs" data-member-sub="${subToken}" title="Copy direct subscription URL">Sub🔗</button><button class="btn btn-secondary btn-xs" data-member-sub-cf="${subToken}" ${cfDisabled} title="${cfTitle}">Sub CF🔗</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
+        els.membersBody.appendChild(row);
+      }
+    }
 
     els.adminEmail.value = localStorage.getItem('adminEmail') || '';
     els.legacyToken.value = localStorage.getItem('legacyAdminToken') || '';
@@ -1162,21 +1222,8 @@
         row.innerHTML = `<td><strong>${tier.name}</strong></td><td style="color:var(--text-dim)">${tier.description || '—'}</td><td style="color:var(--text-dim)">${quotaLabel}</td><td><button class="btn btn-danger btn-xs" data-tier-delete="${tier.id}">✕</button></td>`;
         els.tiersBody.appendChild(row);
       }
-
-      els.membersBody.innerHTML = '';
-      for (const member of members.items) {
-        const badge = `<span class="badge badge-${member.status || 'active'}">${member.status || 'active'}</span>`;
-        const expires = member.expires_at ? new Date(member.expires_at).toLocaleDateString() : '—';
-        const quotaGB = member.quota_bytes_limit > 0 ? (member.quota_bytes_limit / 1e9).toFixed(0) : '—';
-        const tierLabel = member.tier_id && tierMap[member.tier_id] ? tierMap[member.tier_id].name : '—';
-        const isSuspended = member.status === 'suspended';
-        const toggleLabel = isSuspended ? 'Activate' : 'Suspend';
-        const toggleStatus = isSuspended ? 'active' : 'suspended';
-        const subToken = member.subscription_token || '';
-        const row = document.createElement('tr');
-        row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-member-select="${member.id}"></td><td><strong>${member.name}</strong></td><td style="color:var(--text-dim)">${member.email}</td><td style="color:var(--text-muted)">${member.note || '—'}</td><td>${badge}</td><td style="color:var(--text-dim)">${tierLabel}</td><td style="color:var(--text-dim)">${expires}</td><td style="color:var(--text-dim)">${quotaGB}</td><td style="color:var(--text-muted)">${new Date(member.created_at).toLocaleDateString()}</td><td><div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-secondary btn-xs" data-member-toggle="${member.id}" data-toggle-status="${toggleStatus}">${toggleLabel}</button><button class="btn btn-secondary btn-xs" data-member-expiry="${member.id}">Expiry</button><button class="btn btn-secondary btn-xs" data-member-edit="${member.id}" data-member-name="${encodeURIComponent(member.name)}" data-member-email="${encodeURIComponent(member.email)}" data-member-note="${encodeURIComponent(member.note||'')}" data-member-uuid="${member.uuid||''}" data-member-tier="${member.tier_id||''}" data-member-quota="${member.quota_bytes_limit||0}">Edit</button><button class="btn btn-secondary btn-xs" data-member-clash="${member.id}" data-member-name="${encodeURIComponent(member.name)}">Clash↓</button><button class="btn btn-secondary btn-xs" data-member-clash-cf="${member.id}" data-member-name="${encodeURIComponent(member.name)}">CF↓</button><button class="btn btn-secondary btn-xs" data-member-sub="${subToken}" title="Copy subscription URL">Sub🔗</button><button class="btn btn-danger btn-xs" data-member-delete="${member.id}">✕</button></div></td>`;
-        els.membersBody.appendChild(row);
-      }
+      window.__tierMap = tierMap;
+      renderMembers(members.items, tierMap);
 
       els.grantsBody.innerHTML = '';
       for (const grant of grants.items) {
@@ -1909,6 +1956,40 @@
     updateLoginOverlay();
 
     // ── CloudFront admin ──
+    function renderCloudFrontDistributions(selectedID = '') {
+      const select = document.getElementById('cf-distribution-select');
+      if (!cloudFrontDistributions.length) {
+        select.innerHTML = '<option value="">Load distributions first</option>';
+        return;
+      }
+      const options = cloudFrontDistributions.map((item) => {
+        const aliases = (item.aliases || []).join(', ');
+        const label = [item.distributionId, item.domainName, item.status, aliases].filter(Boolean).join(' | ');
+        const selected = item.distributionId === selectedID ? ' selected' : '';
+        return `<option value="${item.distributionId}"${selected}>${escapeHtml(label)}</option>`;
+      });
+      select.innerHTML = `<option value="">Select a distribution</option>${options.join('')}`;
+      if (!selectedID) select.value = '';
+    }
+
+    async function loadCloudFrontDistributions(selectedID = '') {
+      const outputEl = document.getElementById('cf-action-output');
+      outputEl.style.display = 'block';
+      outputEl.textContent = 'Loading distributions…';
+      try {
+        const result = await api('/api/admin/cloudfront/distributions');
+        cloudFrontDistributions = result.items || [];
+        renderCloudFrontDistributions(selectedID);
+        outputEl.textContent = JSON.stringify(result, null, 2);
+        toast(`Loaded ${cloudFrontDistributions.length} distributions`);
+      } catch (error) {
+        cloudFrontDistributions = [];
+        renderCloudFrontDistributions();
+        outputEl.textContent = `Error: ${error.message}`;
+        toast(error.message, 'error');
+      }
+    }
+
     async function loadCloudFrontConfig() {
       try {
         const cfg = await api('/api/admin/cloudfront/config');
@@ -1923,13 +2004,23 @@
         document.getElementById('cf-status-drift').style.color = cfg.driftStatus === 'drifted' ? 'var(--yellow)' : 'var(--green)';
         document.getElementById('cf-status-last-sync').textContent = cfg.lastSyncedAt ? new Date(cfg.lastSyncedAt).toLocaleString() : '--';
         document.getElementById('cf-status-key').textContent = cfg.accessKeyId || '--';
+        cloudFrontReady = !!(cfg.enabled && cfg.distributionId && cfg.lastSuccessfulSyncAt && cfg.syncStatus !== 'failed' && !['drifted', 'conflict'].includes(cfg.driftStatus));
         document.getElementById('cf-region').value = cfg.region || 'us-east-1';
+        document.getElementById('cf-custom-entry-host').value = cfg.customEntryHost || '';
+        document.getElementById('cf-mode').value = cfg.mode || 'managed';
+        document.getElementById('cf-distribution-id').value = cfg.distributionId || '';
+        document.getElementById('cf-distribution-domain').value = cfg.distributionDomainName || '';
+        renderCloudFrontDistributions(cfg.distributionId || '');
+        if (Array.isArray(window.__membersCache) && window.__membersCache.length) renderMembers(window.__membersCache);
       } catch (error) {
         if (error.status !== 404) {
           console.error('Failed to load CloudFront config:', error);
         }
         document.getElementById('cf-status-enabled').textContent = 'Not configured';
         document.getElementById('cf-status-enabled').style.color = 'var(--text-muted)';
+        cloudFrontReady = false;
+        renderCloudFrontDistributions();
+        if (Array.isArray(window.__membersCache) && window.__membersCache.length) renderMembers(window.__membersCache);
       }
     }
 
@@ -1938,11 +2029,15 @@
         accessKeyId: document.getElementById('cf-access-key').value.trim(),
         secretAccessKey: document.getElementById('cf-secret-key').value,
         region: document.getElementById('cf-region').value.trim() || 'us-east-1',
+        customEntryHost: document.getElementById('cf-custom-entry-host').value.trim(),
+        mode: document.getElementById('cf-mode').value,
+        distributionId: document.getElementById('cf-distribution-id').value.trim(),
+        distributionDomainName: document.getElementById('cf-distribution-domain').value.trim(),
       };
       const sessionToken = document.getElementById('cf-session-token').value;
       if (sessionToken) data.sessionToken = sessionToken;
-      if (!data.accessKeyId || !data.secretAccessKey) {
-        toast('Access Key ID and Secret Access Key are required.', 'error');
+      if ((!data.accessKeyId || !data.secretAccessKey) && !document.getElementById('cf-status-key').textContent.startsWith('****')) {
+        toast('Access Key ID and Secret Access Key are required for initial setup.', 'error');
         return;
       }
       try {
@@ -1986,10 +2081,35 @@
       }
     }
 
+    async function bindCloudFrontDistribution() {
+      const selectedID = document.getElementById('cf-distribution-select').value.trim() || document.getElementById('cf-distribution-id').value.trim();
+      const mode = document.getElementById('cf-mode').value;
+      if (!selectedID && mode !== 'managed') {
+        toast('Select a distribution first, or switch to Managed mode to create one.', 'error');
+        return;
+      }
+      const outputEl = document.getElementById('cf-action-output');
+      outputEl.style.display = 'block';
+      outputEl.textContent = selectedID ? 'Binding distribution…' : 'No distribution selected in Managed mode; creating a new distribution…';
+      try {
+        const result = await api('/api/admin/cloudfront/bind', {
+          method: 'POST',
+          body: JSON.stringify(selectedID ? { distributionId: selectedID } : {}),
+        });
+        outputEl.textContent = JSON.stringify(result, null, 2);
+        toast(selectedID ? 'Bind completed' : 'Managed distribution created and bound');
+        await loadCloudFrontConfig();
+      } catch (error) {
+        outputEl.textContent = `Error: ${error.message}`;
+        toast(error.message, 'error');
+      }
+    }
+
     document.getElementById('cf-save-btn').addEventListener('click', saveCloudFrontConfig);
     document.getElementById('cf-delete-btn').addEventListener('click', deleteCloudFrontConfig);
+    document.getElementById('cf-discover-btn').addEventListener('click', () => loadCloudFrontDistributions(document.getElementById('cf-distribution-id').value.trim()));
     document.getElementById('cf-scan-btn').addEventListener('click', () => cloudFrontAction('scan', 'Scan'));
-    document.getElementById('cf-bind-btn').addEventListener('click', () => cloudFrontAction('bind', 'Bind'));
+    document.getElementById('cf-bind-btn').addEventListener('click', bindCloudFrontDistribution);
     document.getElementById('cf-plan-btn').addEventListener('click', () => cloudFrontAction('plan', 'Plan'));
     document.getElementById('cf-sync-btn').addEventListener('click', () => cloudFrontAction('sync', 'Sync'));
     document.getElementById('cf-refresh-status-btn').addEventListener('click', loadCloudFrontConfig);
@@ -2004,6 +2124,18 @@
       } catch (error) {
         toast(error.message, 'error');
         this.checked = !this.checked;
+      }
+    });
+
+    document.addEventListener('click', async (event) => {
+      const subToken = event.target?.dataset?.memberSubCf;
+      if (!subToken) return;
+      const url = `${location.origin}/sub/${subToken}/clash-cf.yaml`;
+      try {
+        await navigator.clipboard.writeText(url);
+        toast('CloudFront subscription URL copied');
+      } catch {
+        prompt('Copy CloudFront subscription URL:', url);
       }
     });
 

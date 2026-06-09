@@ -2,6 +2,7 @@ package cloudfront
 
 import (
 	"encoding/json"
+	"strings"
 
 	"v2ray-platform/internal/domain"
 	"v2ray-platform/internal/store"
@@ -24,8 +25,9 @@ type BindResult struct {
 	UnmatchedCount int                        `json:"unmatchedCount"`
 }
 
-// BindNodes matches platform nodes against discovered CloudFront origins.
-// It produces bindings by matching on route_key.
+// BindNodes matches platform nodes against discovered CloudFront routes.
+// Existing discovered routes keep their current origin IDs; unmatched nodes get
+// a managed origin ID derived from the node ID so sync can create them later.
 func (s *BindService) BindNodes() (*BindResult, error) {
 	cfg, err := s.store.GetCloudFrontConfig()
 	if err != nil {
@@ -61,17 +63,19 @@ func (s *BindService) BindNodes() (*BindResult, error) {
 			continue
 		}
 		origin, exists := originByRouteKey[node.RouteKey]
-		if !exists {
+		originID := managedOriginID(node.ID)
+		if exists && isManagedOriginID(origin.OriginID) {
+			originID = origin.OriginID
+			matched++
+		} else {
 			unmatched++
-			continue
 		}
 		bindings = append(bindings, domain.CloudFrontBinding{
 			NodeID:    node.ID,
-			OriginID:  origin.OriginID,
+			OriginID:  originID,
 			RouteKey:  node.RouteKey,
 			GroupName: node.Name, // use node name as group name
 		})
-		matched++
 	}
 
 	// Persist bindings
@@ -88,4 +92,12 @@ func (s *BindService) BindNodes() (*BindResult, error) {
 		MatchedCount:   matched,
 		UnmatchedCount: unmatched,
 	}, nil
+}
+
+func managedOriginID(nodeID string) string {
+	return "v2ray-platform-node-" + nodeID
+}
+
+func isManagedOriginID(originID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(originID), "v2ray-platform-node-")
 }

@@ -1840,66 +1840,66 @@ func (s *PostgresStore) GetMemberBySubscriptionToken(token string) (*domain.Memb
 }
 
 func (s *PostgresStore) ListNodeConfigRevisions(nodeID string) ([]domain.ConfigRevision, error) {
-rows, err := s.db.Query(
-`SELECT node_id, config_version, config_hash, created_at
+	rows, err := s.db.Query(
+		`SELECT node_id, config_version, config_hash, created_at
  FROM node_config_revisions
  WHERE node_id = $1
  ORDER BY config_version DESC
  LIMIT 3`,
-nodeID,
-)
-if err != nil {
-return nil, mapPQError(err)
-}
-defer rows.Close()
-var out []domain.ConfigRevision
-for rows.Next() {
-var rev domain.ConfigRevision
-if err := rows.Scan(&rev.NodeID, &rev.ConfigVersion, &rev.ConfigHash, &rev.UpdatedAt); err != nil {
-return nil, err
-}
-out = append(out, rev)
-}
-return out, nil
+		nodeID,
+	)
+	if err != nil {
+		return nil, mapPQError(err)
+	}
+	defer rows.Close()
+	var out []domain.ConfigRevision
+	for rows.Next() {
+		var rev domain.ConfigRevision
+		if err := rows.Scan(&rev.NodeID, &rev.ConfigVersion, &rev.ConfigHash, &rev.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rev)
+	}
+	return out, nil
 }
 
 func (s *PostgresStore) RollbackNodeConfig(nodeID string, version int64) (*domain.ConfigRevision, error) {
-tx, err := s.db.BeginTx(context.Background(), nil)
-if err != nil {
-return nil, err
-}
-defer tx.Rollback()
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
 
-var configText, configHash string
-err = tx.QueryRow(
-`SELECT config_json::text, config_hash FROM node_config_revisions WHERE node_id = $1 AND config_version = $2`,
-nodeID, version,
-).Scan(&configText, &configHash)
-if errors.Is(err, sql.ErrNoRows) {
-return nil, ErrNotFound
-}
-if err != nil {
-return nil, mapPQError(err)
-}
+	var configText, configHash string
+	err = tx.QueryRow(
+		`SELECT config_json::text, config_hash FROM node_config_revisions WHERE node_id = $1 AND config_version = $2`,
+		nodeID, version,
+	).Scan(&configText, &configHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, mapPQError(err)
+	}
 
-var nextVersion int64
-if err := tx.QueryRow(
-`SELECT COALESCE(MAX(config_version), 0) + 1 FROM node_config_revisions WHERE node_id = $1`, nodeID,
-).Scan(&nextVersion); err != nil {
-return nil, mapPQError(err)
-}
+	var nextVersion int64
+	if err := tx.QueryRow(
+		`SELECT COALESCE(MAX(config_version), 0) + 1 FROM node_config_revisions WHERE node_id = $1`, nodeID,
+	).Scan(&nextVersion); err != nil {
+		return nil, mapPQError(err)
+	}
 
-now := time.Now().UTC()
-if _, err := tx.Exec(
-`INSERT INTO node_config_revisions (node_id, config_version, config_json, config_hash, created_at)
+	now := time.Now().UTC()
+	if _, err := tx.Exec(
+		`INSERT INTO node_config_revisions (node_id, config_version, config_json, config_hash, created_at)
  VALUES ($1, $2, $3::jsonb, $4, $5)`,
-nodeID, nextVersion, configText, configHash, now,
-); err != nil {
-return nil, mapPQError(err)
-}
+		nodeID, nextVersion, configText, configHash, now,
+	); err != nil {
+		return nil, mapPQError(err)
+	}
 
-_, _ = tx.Exec(
-`DELETE FROM node_config_revisions
+	_, _ = tx.Exec(
+		`DELETE FROM node_config_revisions
  WHERE node_id = $1
    AND config_version NOT IN (
      SELECT config_version FROM node_config_revisions
@@ -1907,19 +1907,19 @@ _, _ = tx.Exec(
      ORDER BY config_version DESC
      LIMIT 3
    )`,
-nodeID,
-)
-_, _ = tx.Exec(`UPDATE nodes SET updated_at = $2 WHERE id = $1`, nodeID, now)
+		nodeID,
+	)
+	_, _ = tx.Exec(`UPDATE nodes SET updated_at = $2 WHERE id = $1`, nodeID, now)
 
-if err := tx.Commit(); err != nil {
-return nil, err
-}
-return &domain.ConfigRevision{
-NodeID:        nodeID,
-ConfigVersion: nextVersion,
-Config:        configText,
-UpdatedAt:     now,
-}, nil
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &domain.ConfigRevision{
+		NodeID:        nodeID,
+		ConfigVersion: nextVersion,
+		Config:        configText,
+		UpdatedAt:     now,
+	}, nil
 }
 
 func (s *PostgresStore) SetNodeProxy(nodeID, proxyNodeID string) error {
@@ -1993,43 +1993,81 @@ func (s *PostgresStore) GetCloudFrontConfig() (*domain.CloudFrontConfig, error) 
 func (s *PostgresStore) SaveCloudFrontConfig(input SaveCloudFrontConfigInput) error {
 	now := time.Now().UTC()
 	enabled := input.Enabled != nil && *input.Enabled
+	var existingDistributionID, existingDistributionDomainName, existingMode string
+	targetChanged := false
+	err := s.db.QueryRow(
+		`SELECT distribution_id, distribution_domain_name, mode FROM cloudfront_configs WHERE id = 'cf-global'`,
+	).Scan(&existingDistributionID, &existingDistributionDomainName, &existingMode)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return mapPQError(err)
+	}
+	if err == nil {
+		targetChanged = (input.DistributionID != "" && existingDistributionID != input.DistributionID) ||
+			(input.DistributionDomainName != "" && existingDistributionDomainName != input.DistributionDomainName) ||
+			(input.Mode != "" && existingMode != input.Mode)
+	}
 	if input.Enabled != nil {
-		_, err := s.db.Exec(
+		_, err = s.db.Exec(
 			`INSERT INTO cloudfront_configs
 			 (id, encrypted_access_key_id, encrypted_secret_access_key, encrypted_session_token, aws_region, enabled,
-			  origins_json, distribution_id, distribution_domain_name, mode,
+			  custom_entry_host, origins_json, distribution_id, distribution_domain_name, mode,
 			  bindings_json, plan_json, last_synced_at, sync_status, last_sync_error,
 			  created_at, updated_at)
-			 VALUES ('cf-global', $1, $2, $3, $4, $5, '[]', '', '', 'managed', '[]', '[]', NULL, 'idle', '', $6, $6)
+			 VALUES ('cf-global', $1, $2, $3, $4, $5, $6, '[]', $7, $8, $9, '[]', '[]', NULL, 'idle', '', $10, $10)
 			 ON CONFLICT (id) DO UPDATE SET
-			  encrypted_access_key_id = EXCLUDED.encrypted_access_key_id,
-			  encrypted_secret_access_key = EXCLUDED.encrypted_secret_access_key,
-			  encrypted_session_token = EXCLUDED.encrypted_session_token,
+			  encrypted_access_key_id = CASE WHEN $11 THEN cloudfront_configs.encrypted_access_key_id ELSE EXCLUDED.encrypted_access_key_id END,
+			  encrypted_secret_access_key = CASE WHEN $11 THEN cloudfront_configs.encrypted_secret_access_key ELSE EXCLUDED.encrypted_secret_access_key END,
+			  encrypted_session_token = CASE WHEN $11 THEN cloudfront_configs.encrypted_session_token ELSE EXCLUDED.encrypted_session_token END,
 			  aws_region = EXCLUDED.aws_region,
+			  custom_entry_host = EXCLUDED.custom_entry_host,
+			  distribution_id = CASE WHEN EXCLUDED.distribution_id != '' THEN EXCLUDED.distribution_id ELSE cloudfront_configs.distribution_id END,
+			  distribution_domain_name = CASE WHEN EXCLUDED.distribution_domain_name != '' THEN EXCLUDED.distribution_domain_name ELSE cloudfront_configs.distribution_domain_name END,
+			  mode = CASE WHEN EXCLUDED.mode != '' THEN EXCLUDED.mode ELSE cloudfront_configs.mode END,
 			  enabled = EXCLUDED.enabled,
 			  updated_at = EXCLUDED.updated_at`,
 			input.EncryptedAccessKeyID, input.EncryptedSecretAccessKey, input.EncryptedSessionToken,
-			input.AWSRegion, enabled, now,
+			input.AWSRegion, enabled, input.CustomEntryHost, input.DistributionID, input.DistributionDomainName, firstNonEmpty(input.Mode, "managed"), now, input.RetainExistingSecrets,
+		)
+	} else {
+		_, err = s.db.Exec(
+			`INSERT INTO cloudfront_configs
+			 (id, encrypted_access_key_id, encrypted_secret_access_key, encrypted_session_token, aws_region, enabled,
+			  custom_entry_host, origins_json, distribution_id, distribution_domain_name, mode,
+			  bindings_json, plan_json, last_synced_at, sync_status, last_sync_error,
+			  created_at, updated_at)
+			 VALUES ('cf-global', $1, $2, $3, $4, $5, $6, '[]', $7, $8, $9, '[]', '[]', NULL, 'idle', '', $10, $10)
+			 ON CONFLICT (id) DO UPDATE SET
+			  encrypted_access_key_id = CASE WHEN $11 THEN cloudfront_configs.encrypted_access_key_id ELSE EXCLUDED.encrypted_access_key_id END,
+			  encrypted_secret_access_key = CASE WHEN $11 THEN cloudfront_configs.encrypted_secret_access_key ELSE EXCLUDED.encrypted_secret_access_key END,
+			  encrypted_session_token = CASE WHEN $11 THEN cloudfront_configs.encrypted_session_token ELSE EXCLUDED.encrypted_session_token END,
+			  aws_region = EXCLUDED.aws_region,
+			  custom_entry_host = EXCLUDED.custom_entry_host,
+			  distribution_id = CASE WHEN EXCLUDED.distribution_id != '' THEN EXCLUDED.distribution_id ELSE cloudfront_configs.distribution_id END,
+			  distribution_domain_name = CASE WHEN EXCLUDED.distribution_domain_name != '' THEN EXCLUDED.distribution_domain_name ELSE cloudfront_configs.distribution_domain_name END,
+			  mode = CASE WHEN EXCLUDED.mode != '' THEN EXCLUDED.mode ELSE cloudfront_configs.mode END,
+			  updated_at = EXCLUDED.updated_at`,
+			input.EncryptedAccessKeyID, input.EncryptedSecretAccessKey, input.EncryptedSessionToken,
+			input.AWSRegion, enabled, input.CustomEntryHost, input.DistributionID, input.DistributionDomainName, firstNonEmpty(input.Mode, "managed"), now, input.RetainExistingSecrets,
+		)
+	}
+	if err != nil {
+		return mapPQError(err)
+	}
+	if targetChanged {
+		_, err = s.db.Exec(
+			`UPDATE cloudfront_configs
+			 SET sync_status = 'idle',
+			     drift_status = '',
+			     last_sync_error = '',
+			     last_synced_at = NULL,
+			     last_successful_sync_at = NULL,
+			     updated_at = $1
+			 WHERE id = 'cf-global'`,
+			now,
 		)
 		return mapPQError(err)
 	}
-	_, err := s.db.Exec(
-		`INSERT INTO cloudfront_configs
-		 (id, encrypted_access_key_id, encrypted_secret_access_key, encrypted_session_token, aws_region, enabled,
-		  origins_json, distribution_id, distribution_domain_name, mode,
-		  bindings_json, plan_json, last_synced_at, sync_status, last_sync_error,
-		  created_at, updated_at)
-		 VALUES ('cf-global', $1, $2, $3, $4, $5, '[]', '', '', 'managed', '[]', '[]', NULL, 'idle', '', $6, $6)
-		 ON CONFLICT (id) DO UPDATE SET
-		  encrypted_access_key_id = EXCLUDED.encrypted_access_key_id,
-		  encrypted_secret_access_key = EXCLUDED.encrypted_secret_access_key,
-		  encrypted_session_token = EXCLUDED.encrypted_session_token,
-		  aws_region = EXCLUDED.aws_region,
-		  updated_at = EXCLUDED.updated_at`,
-		input.EncryptedAccessKeyID, input.EncryptedSecretAccessKey, input.EncryptedSessionToken,
-		input.AWSRegion, enabled, now,
-	)
-	return mapPQError(err)
+	return nil
 }
 
 func (s *PostgresStore) DeleteCloudFrontConfig() error {
@@ -2051,7 +2089,12 @@ func (s *PostgresStore) UpdateCloudFrontDistribution(distributionID, distributio
 	now := time.Now().UTC()
 	res, err := s.db.Exec(
 		`UPDATE cloudfront_configs
-		 SET distribution_id = $1, distribution_domain_name = $2, mode = $3, updated_at = $4
+		 SET distribution_id = $1, distribution_domain_name = $2, mode = $3, updated_at = $4,
+		     sync_status = CASE WHEN distribution_id IS DISTINCT FROM $1 OR distribution_domain_name IS DISTINCT FROM $2 OR mode IS DISTINCT FROM $3 THEN 'idle' ELSE sync_status END,
+		     drift_status = CASE WHEN distribution_id IS DISTINCT FROM $1 OR distribution_domain_name IS DISTINCT FROM $2 OR mode IS DISTINCT FROM $3 THEN '' ELSE drift_status END,
+		     last_sync_error = CASE WHEN distribution_id IS DISTINCT FROM $1 OR distribution_domain_name IS DISTINCT FROM $2 OR mode IS DISTINCT FROM $3 THEN '' ELSE last_sync_error END,
+		     last_synced_at = CASE WHEN distribution_id IS DISTINCT FROM $1 OR distribution_domain_name IS DISTINCT FROM $2 OR mode IS DISTINCT FROM $3 THEN NULL ELSE last_synced_at END,
+		     last_successful_sync_at = CASE WHEN distribution_id IS DISTINCT FROM $1 OR distribution_domain_name IS DISTINCT FROM $2 OR mode IS DISTINCT FROM $3 THEN NULL ELSE last_successful_sync_at END
 		 WHERE id = 'cf-global'`,
 		distributionID, distributionDomainName, mode, now,
 	)
@@ -2093,7 +2136,13 @@ func (s *PostgresStore) UpdateCloudFrontBindings(bindingsJSON string) error {
 	now := time.Now().UTC()
 	res, err := s.db.Exec(
 		`UPDATE cloudfront_configs
-		 SET bindings_json = $1, updated_at = $2
+		 SET bindings_json = $1,
+		     sync_status = CASE WHEN bindings_json IS DISTINCT FROM $1 THEN 'idle' ELSE sync_status END,
+		     drift_status = CASE WHEN bindings_json IS DISTINCT FROM $1 THEN '' ELSE drift_status END,
+		     last_sync_error = CASE WHEN bindings_json IS DISTINCT FROM $1 THEN '' ELSE last_sync_error END,
+		     last_synced_at = CASE WHEN bindings_json IS DISTINCT FROM $1 THEN NULL ELSE last_synced_at END,
+		     last_successful_sync_at = CASE WHEN bindings_json IS DISTINCT FROM $1 THEN NULL ELSE last_successful_sync_at END,
+		     updated_at = $2
 		 WHERE id = 'cf-global'`,
 		bindingsJSON, now,
 	)
@@ -2119,16 +2168,16 @@ func (s *PostgresStore) UpdateCloudFrontSyncStatus(input UpdateCloudFrontSyncInp
 		     mode = COALESCE(NULLIF($3, ''), mode),
 		     bindings_json = CASE WHEN $4 != '' THEN $4 ELSE bindings_json END,
 		     plan_json = CASE WHEN $5 != '' THEN $5 ELSE plan_json END,
-		     sync_status = $6,
+		     sync_status = CASE WHEN $10 THEN sync_status ELSE $6 END,
 		     drift_status = $7,
-		     last_sync_error = $8,
-		     last_synced_at = $9,
+		     last_sync_error = CASE WHEN $10 AND $8 = '' THEN last_sync_error ELSE $8 END,
+		     last_synced_at = CASE WHEN $10 AND $6 = '' THEN last_synced_at ELSE $9 END,
 		     last_successful_sync_at = CASE WHEN $6 = 'synced' THEN $9 ELSE last_successful_sync_at END,
 		     updated_at = $9
 		 WHERE id = 'cf-global'`,
 		input.DistributionID, input.DistributionDomainName, input.Mode,
 		input.BindingsJSON, input.PlanJSON, input.SyncStatus, input.DriftStatus,
-		input.LastSyncError, now,
+		input.LastSyncError, now, input.PreserveSyncStatus,
 	)
 	if err != nil {
 		return mapPQError(err)

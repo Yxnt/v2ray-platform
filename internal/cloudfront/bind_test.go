@@ -74,8 +74,8 @@ func TestBindNodesMatchesByRouteKey(t *testing.T) {
 		AWSRegion:            "us-east-1",
 	})
 	origins := []domain.CloudFrontOrigin{
-		{OriginID: "origin-1", Host: "node1.example.com", RouteKey: rk1},
-		{OriginID: "origin-2", Host: "node2.example.com", RouteKey: rk2},
+		{OriginID: managedOriginID(reg1.NodeID), Host: "node1.example.com", RouteKey: rk1},
+		{OriginID: managedOriginID(reg2.NodeID), Host: "node2.example.com", RouteKey: rk2},
 	}
 	originsJSON, _ := json.Marshal(origins)
 	memStore.UpdateCloudFrontOrigins(string(originsJSON))
@@ -240,7 +240,7 @@ func TestBindNodesPartialMatch(t *testing.T) {
 		AWSRegion:            "us-east-1",
 	})
 	origins := []domain.CloudFrontOrigin{
-		{OriginID: "origin-1", Host: "node1.example.com", RouteKey: rk1},
+		{OriginID: managedOriginID(reg1.NodeID), Host: "node1.example.com", RouteKey: rk1},
 	}
 	originsJSON, _ := json.Marshal(origins)
 	memStore.UpdateCloudFrontOrigins(string(originsJSON))
@@ -297,5 +297,55 @@ func TestBindNodesEmptyOrigins(t *testing.T) {
 	}
 	if result.UnmatchedCount != 1 {
 		t.Fatalf("expected 1 unmatched, got %d", result.UnmatchedCount)
+	}
+}
+
+func TestBindNodesDoesNotAdoptUnmanagedOrigin(t *testing.T) {
+	memStore := store.NewMemoryStore()
+
+	_, tok, err := memStore.CreateBootstrapToken(store.CreateBootstrapTokenInput{
+		Description: "node1",
+		TTLHours:    24,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := memStore.RegisterNode(store.RegisterNodeInput{
+		BootstrapToken: tok,
+		Name:           "Node 1",
+		Region:         "us-east-1",
+		RuntimeFlavor:  "vmess",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodes := memStore.ListNodes()
+	routeKey := nodes[0].RouteKey
+
+	memStore.SaveCloudFrontConfig(store.SaveCloudFrontConfigInput{
+		EncryptedAccessKeyID: "test",
+		AWSRegion:            "us-east-1",
+	})
+	origins := []domain.CloudFrontOrigin{
+		{OriginID: "custom-origin-1", Host: "node1.example.com", RouteKey: routeKey},
+	}
+	originsJSON, _ := json.Marshal(origins)
+	memStore.UpdateCloudFrontOrigins(string(originsJSON))
+	memStore.UpdateCloudFrontDistribution("E1234", "d1234.cloudfront.net", "managed")
+
+	svc := NewBindService(memStore)
+	result, err := svc.BindNodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MatchedCount != 0 {
+		t.Fatalf("expected 0 matched, got %d", result.MatchedCount)
+	}
+	if result.UnmatchedCount != 1 {
+		t.Fatalf("expected 1 unmatched, got %d", result.UnmatchedCount)
+	}
+	if len(result.Bindings) != 1 || result.Bindings[0].OriginID != managedOriginID(reg.NodeID) {
+		t.Fatalf("expected managed origin placeholder, got %+v", result.Bindings)
 	}
 }
