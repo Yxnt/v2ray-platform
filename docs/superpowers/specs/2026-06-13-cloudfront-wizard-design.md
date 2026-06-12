@@ -175,6 +175,8 @@ Behavior:
 
 - call the existing managed create path
 - persist the created distribution as the current target
+- treat the created distribution as the selected target for the next step
+- do not consider the setup fully bound or ready for sync yet
 - advance to Step 4
 
 ### Step 4: Review and Bind
@@ -193,7 +195,7 @@ Primary action:
 Behavior:
 
 - for existing distribution path, entering Step 4 auto-runs scan against the selected distribution
-- for new managed distribution path, entering Step 4 uses the freshly created distribution state
+- for new managed distribution path, entering Step 4 uses the freshly created distribution state and presents the same review surface before final bind confirmation
 - binding confirms that this distribution is now the active target
 
 ### Step 5: Check Changes and Sync
@@ -204,9 +206,8 @@ Show:
 - route-level action summary
 - final sync readiness state
 
-Primary actions:
+Primary action:
 
-- `Check changes`
 - `Apply to CloudFront`
 
 Behavior:
@@ -214,6 +215,7 @@ Behavior:
 - auto-run plan when entering Step 5
 - if the result is `conflict`, disable sync and show a clear blocking reason
 - if the result is `drifted` or actionable but safe, enable final sync
+- if the operator wants to refresh the plan manually, expose a secondary `Re-check changes` action rather than making it the primary path
 - on sync success, render a completion state indicating CloudFront export readiness
 
 ## Existing Config Behavior
@@ -226,13 +228,17 @@ If the system already has credentials and a bound distribution:
   - `Keep current setup`
   - `Change CloudFront setup`
 
+The `Current setup` state is not Step 0 inside the stepper. It is a lightweight landing state shown before the five-step wizard is entered for returning users. Once the operator chooses either path, the UI enters the normal five-step stepper.
+
 ### Keep Current Setup
 
 Jump near the end of the flow:
 
 - show current distribution
 - show current sync state
-- allow `Check changes` and `Apply to CloudFront`
+- enter Step 5 directly with auto-plan behavior
+- allow `Apply to CloudFront`
+- expose `Re-check changes` as a secondary action if the operator wants to rerun plan manually
 
 ### Change CloudFront Setup
 
@@ -274,7 +280,7 @@ The wizard should orchestrate existing endpoints rather than replacing them:
 
 - Step 1: `POST /api/admin/cloudfront/config` and `GET /api/admin/cloudfront/distributions`
 - Step 3A or Step 4: `POST /api/admin/cloudfront/scan` with selected distribution
-- Step 3B: `POST /api/admin/cloudfront/bind` with managed-create path
+- Step 3B: `POST /api/admin/cloudfront/bind` with managed-create path to create and select the new target distribution
 - Step 4: `POST /api/admin/cloudfront/bind`
 - Step 5 planning: `POST /api/admin/cloudfront/plan`
 - Step 5 sync: `POST /api/admin/cloudfront/sync`
