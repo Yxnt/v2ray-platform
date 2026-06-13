@@ -86,6 +86,26 @@ func TestRouterHandlesAPIPreflight(t *testing.T) {
 	}
 }
 
+func TestAdminWebUIIsServedWithoutCache(t *testing.T) {
+	st := store.NewMemoryStore()
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{}, svc, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store, max-age=0" {
+		t.Fatalf("expected no-store cache header, got %q", got)
+	}
+	if !strings.Contains(rec.Body.String(), `<section class="tab-content active" id="tab-nodes">`) {
+		t.Fatalf("expected admin index html, got %s", rec.Body.String())
+	}
+}
+
 func TestStatelessMemoryModeLogoutAllReturnsSuccess(t *testing.T) {
 	st := store.NewMemoryStore()
 	admin, err := st.EnsureAdmin("admin@example.com", "hash")
@@ -660,7 +680,47 @@ func TestCloudFrontBindRequiresDistributionWhenNotManagedCreate(t *testing.T) {
 	}
 }
 
-func TestCloudFrontAdminUIAllowsManagedCreateWithoutSelectedDistribution(t *testing.T) {
+func TestCloudFrontScanUsesSelectedDistributionWhenProvided(t *testing.T) {
+	st := store.NewMemoryStore()
+	codec := newCloudFrontTestCodec(t)
+	seedEncryptedCloudFrontConfig(t, st, codec)
+
+	mockClient := &mockControlPlaneCloudFrontClient{
+		distribution: &cloudfront.DistributionState{
+			DistributionID: "E1234",
+			DomainName:     "d1234.cloudfront.net",
+			Origins: []cloudfront.OriginState{
+				{OriginID: "origin-remote", DomainName: "node-1.example.com"},
+			},
+			Behaviors: []cloudfront.BehaviorState{
+				{PathPattern: "/rk123", OriginID: "origin-remote"},
+			},
+		},
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	svc.cloudFrontClientFactory = func(*domain.CloudFrontConfig) (cloudfront.Client, error) {
+		return mockClient, nil
+	}
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, codec)
+
+	body := bytes.NewBufferString(`{"distributionId":"E1234"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/cloudfront/scan", body)
+	req.Header.Set("X-Admin-Token", "admin-token")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if mockClient.lastGetDistributionID != "E1234" {
+		t.Fatalf("expected scan flow to scan selected distribution, got %q", mockClient.lastGetDistributionID)
+	}
+}
+
+func TestCloudFrontAdminUIContainsWizardShell(t *testing.T) {
 	htmlBytes, err := webAssets.ReadFile("web/index.html")
 	if err != nil {
 		t.Fatal(err)
@@ -668,16 +728,222 @@ func TestCloudFrontAdminUIAllowsManagedCreateWithoutSelectedDistribution(t *test
 	html := string(htmlBytes)
 
 	required := []string{
-		`id="cf-bind-btn">Bind / Create`,
-		`leaving this empty creates a new platform-managed distribution`,
-		`No distribution selected in Managed mode; creating a new distribution`,
-		`JSON.stringify(selectedID ? { distributionId: selectedID } : {})`,
-		`Managed distribution created and bound`,
-		`!['drifted', 'conflict'].includes(cfg.driftStatus)`,
+		`id="cf-wizard"`,
+		`id="cf-current-setup"`,
+		`id="cf-stepper"`,
+		`data-cf-step="connect"`,
+		`data-cf-step="path"`,
+		`data-cf-step="target"`,
+		`data-cf-step="review"`,
+		`data-cf-step="sync"`,
+		`Show technical details`,
+		`const cloudFrontStepOrder = ['connect', 'path', 'target', 'review', 'sync'];`,
 	}
 	for _, needle := range required {
 		if !strings.Contains(html, needle) {
-			t.Fatalf("expected CloudFront UI to contain %q", needle)
+			t.Fatalf("expected CloudFront wizard shell to contain %q", needle)
+		}
+	}
+}
+
+func TestCloudFrontAdminUIContainsCurrentSetupActions(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`Keep current setup`,
+		`Change CloudFront setup`,
+		`Use existing credentials`,
+		`Replace credentials`,
+		`Connect and continue`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront setup UI to contain %q", needle)
+		}
+	}
+}
+
+func TestCloudFrontAdminUIKeepsConnectStepFocusedOnCredentials(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+	start := strings.Index(html, `function renderCloudFrontConnectStep()`)
+	end := strings.Index(html, `function renderCloudFrontDeliverySettings()`)
+	if start < 0 || end < 0 || end <= start {
+		t.Fatalf("expected CloudFront connect and delivery settings renderers")
+	}
+	connectStep := html[start:end]
+	forbidden := []string{
+		`cf-region`,
+		`cf-custom-entry-host`,
+		`cf-distribution-id`,
+		`cf-distribution-domain`,
+		`<select id="cf-mode">`,
+		`Bound Distribution ID`,
+		`Bound Distribution Domain`,
+	}
+	for _, needle := range forbidden {
+		if strings.Contains(connectStep, needle) {
+			t.Fatalf("expected CloudFront connect step not to contain %q", needle)
+		}
+	}
+	required := []string{
+		`function renderCloudFrontDeliverySettings()`,
+		`${renderCloudFrontDeliverySettings()}`,
+		`id="cf-region"`,
+		`id="cf-custom-entry-host"`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront delivery settings flow to contain %q", needle)
+		}
+	}
+}
+
+func TestCloudFrontAdminUIClickDelegationUsesClosestIDForWizardCards(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`const target = rawTarget.closest('[id]');`,
+		`if (target.id === 'cf-path-existing') return chooseCloudFrontPath('existing');`,
+		`if (target.id === 'cf-path-managed') return chooseCloudFrontPath('managed');`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront wizard click delegation to contain %q", needle)
+		}
+	}
+}
+
+func TestCloudFrontAdminUIKeepCurrentSetupGoesToSyncStep(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`id="cf-keep-current-btn"`,
+		`async function keepCurrentCloudFrontSetup()`,
+		`renderCloudFrontWizard();`,
+		`await prepareCloudFrontSyncStep();`,
+		`cloudFrontWizard.plan = null;`,
+		`cloudFrontWizard.sync = null;`,
+		`setCloudFrontStep('sync');`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront keep-current flow to contain %q", needle)
+		}
+	}
+}
+
+func TestCloudFrontAdminUIContainsWizardPathChoice(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`Use existing distribution`,
+		`Create new managed distribution`,
+		`No existing distributions found`,
+		`Create a managed distribution instead`,
+		`Use selected distribution`,
+		`Create distribution`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront wizard path UI to contain %q", needle)
+		}
+	}
+}
+
+func TestCloudFrontAdminUIContainsReviewAndSyncWizardStates(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`Bind distribution`,
+		`Apply to CloudFront`,
+		`Re-check changes`,
+		`CloudFront path -> WebSocket path`,
+		`Show technical details`,
+		`Hide technical details`,
+		`<h4>Origins</h4>`,
+		`<h4>Cache behaviors</h4>`,
+		`<h4>Parameters</h4>`,
+		`review?.distributionOrigins`,
+		`review?.cacheBehaviors`,
+		`review?.parameters`,
+		`plan?.rewriteRoutes`,
+		`No websocket path rewrites planned.`,
+		`function canNavigateCloudFrontStep(step)`,
+		`return targetIndex <= activeIndex;`,
+		`const stepTarget = rawTarget.closest('[data-cf-step]');`,
+		`return navigateCloudFrontStep(stepTarget.dataset.cfStep);`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront wizard review/sync UI to contain %q", needle)
+		}
+	}
+}
+
+func TestCloudFrontAdminUIManagedCreatePersistsStateBeforeBind(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`async function persistCloudFrontManagedCreateState()`,
+		`cloudFrontWizard.form.distributionId = '';`,
+		`cloudFrontWizard.form.distributionDomainName = '';`,
+		`await saveCloudFrontConfig({`,
+		`mode: 'managed',`,
+		`await persistCloudFrontManagedCreateState();`,
+		`const result = await api('/api/admin/cloudfront/bind', {`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront managed-create flow to contain %q", needle)
+		}
+	}
+}
+
+func TestCloudFrontAdminUIResetsWizardStateOnDeleteOrMissingConfig(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`function resetCloudFrontWizardState()`,
+		`cloudFrontWizard.currentSetupDismissed = false;`,
+		`cloudFrontWizard.step = 'connect';`,
+		`resetCloudFrontWizardState();`,
+		`document.getElementById('cf-status-drift').textContent = cfg.driftStatus === 'conflict' ? 'Conflict' : cfg.driftStatus === 'drifted' ? 'Drifted' : 'In sync';`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront reset/conflict UI to contain %q", needle)
 		}
 	}
 }
@@ -717,6 +983,13 @@ func TestCloudFrontPlanReadsLiveDistributionState(t *testing.T) {
 	}
 	if mockClient.lastGetDistributionID != "E1234" {
 		t.Fatalf("expected plan to read live distribution, got %q", mockClient.lastGetDistributionID)
+	}
+	body := rec.Body.String()
+	requiredJSON := []string{`"actions"`, `"rewriteRoutes"`, `"driftStatus"`, `"action"`, `"routeKey"`, `"reason"`}
+	for _, needle := range requiredJSON {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("expected plan response body to contain %q, got %s", needle, body)
+		}
 	}
 	var payload cloudfront.SyncPlan
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {

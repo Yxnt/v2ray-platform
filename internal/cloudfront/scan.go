@@ -20,9 +20,12 @@ func NewScanService(store store.Store, client Client) *ScanService {
 }
 
 type ScanResult struct {
-	DistributionID string                    `json:"distributionId"`
-	DomainName     string                    `json:"domainName"`
-	Origins        []domain.CloudFrontOrigin `json:"origins"`
+	DistributionID      string                     `json:"distributionId"`
+	DomainName          string                     `json:"domainName"`
+	Origins             []domain.CloudFrontOrigin  `json:"origins"`
+	DistributionOrigins []OriginState              `json:"distributionOrigins"`
+	CacheBehaviors      []BehaviorState            `json:"cacheBehaviors"`
+	Parameters          []ParameterDefinitionState `json:"parameters"`
 }
 
 func (s *ScanService) ListDistributions(ctx context.Context) ([]DistributionSummary, error) {
@@ -88,9 +91,12 @@ func (s *ScanService) persistDistributionState(mode string, dist *DistributionSt
 	}
 
 	return &ScanResult{
-		DistributionID: dist.DistributionID,
-		DomainName:     dist.DomainName,
-		Origins:        origins,
+		DistributionID:      dist.DistributionID,
+		DomainName:          dist.DomainName,
+		Origins:             origins,
+		DistributionOrigins: append([]OriginState(nil), dist.Origins...),
+		CacheBehaviors:      append([]BehaviorState(nil), dist.Behaviors...),
+		Parameters:          append([]ParameterDefinitionState(nil), dist.Parameters...),
 	}, nil
 }
 

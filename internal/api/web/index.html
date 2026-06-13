@@ -283,7 +283,63 @@
       font-size: 14px; font-weight: 600; color: var(--text); word-break: break-all;
     }
     .cf-status-item .cf-value.cf-dim { color: var(--text-dim); font-weight: 500; }
-    .cf-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+    .cf-status-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+    .cf-wizard { display: grid; gap: 18px; }
+    .cf-current-setup { display: grid; gap: 12px; }
+    .cf-stepper { display: flex; gap: 10px; flex-wrap: wrap; }
+    .cf-step-chip {
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--text-dim);
+      padding: 10px 14px;
+      border-radius: 999px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .cf-step-chip.is-active { background: var(--accent); color: #fff; border-color: transparent; }
+    .cf-step-chip.is-done { border-color: var(--green); color: var(--green); }
+    .cf-step-chip:disabled { cursor: default; opacity: 0.7; }
+    .cf-step-panel { display: grid; gap: 16px; }
+    .cf-step-panel[hidden] { display: none; }
+    .cf-step-copy { display: grid; gap: 6px; }
+    .cf-step-copy h3 { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+    .cf-step-copy p { margin: 0; color: var(--text-dim); font-size: 13px; }
+    .cf-choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .cf-choice-card {
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      border-radius: 14px;
+      padding: 16px;
+      display: grid;
+      gap: 8px;
+    }
+    .cf-choice-card h4 { margin: 0; font-size: 15px; }
+    .cf-choice-card p { margin: 0; color: var(--text-dim); font-size: 13px; }
+    .cf-choice-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow) inset; }
+    .cf-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .cf-detail-card {
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      border-radius: 12px;
+      padding: 14px;
+      display: grid;
+      gap: 6px;
+    }
+    .cf-detail-card h4 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+    .cf-detail-card p { margin: 0; font-size: 14px; color: var(--text); word-break: break-word; }
+    .cf-inline-note { color: var(--text-dim); font-size: 13px; margin: 0; }
+    .cf-inline-error {
+      color: #fca5a5;
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.18);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 13px;
+    }
+    .cf-actions-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .cf-tech-open #cf-action-output { display: block !important; }
+    .cf-tech-summary { color: var(--text-muted); font-size: 12px; }
   </style>
 </head>
 <body>
@@ -386,7 +442,6 @@
   <button class="tab-btn" data-tab="groups">Groups</button>
   <button class="tab-btn" data-tab="tiers">Tiers</button>
   <button class="tab-btn" data-tab="usage">Usage</button>
-  <button class="tab-btn" data-tab="tokens">Bootstrap Tokens</button>
   <button class="tab-btn" data-tab="logs">Logs & Alerts</button>
   <button class="tab-btn" data-tab="settings">Settings</button>
   <button class="tab-btn" data-tab="cloudfront">CloudFront</button>
@@ -397,31 +452,7 @@
   <!-- ════════════════ NODES ════════════════ -->
   <section class="tab-content active" id="tab-nodes">
     <div class="section-hd">
-      <div><h2>Nodes</h2><p>Manage your V2Ray nodes and bootstrap tokens</p></div>
-    </div>
-
-    <!-- Create bootstrap token -->
-    <div class="create-panel">
-      <button class="cp-toggle" data-panel="bootstrap">
-        ＋ Create bootstrap token
-        <span class="cp-arrow">＋</span>
-      </button>
-      <div class="cp-body" id="panel-bootstrap">
-        <div class="form-row">
-          <div class="field grow">
-            <label for="bootstrap-description">Description</label>
-            <input id="bootstrap-description" placeholder="aws-ap-southeast-1">
-          </div>
-          <div class="field" style="min-width:100px">
-            <label for="bootstrap-ttl">TTL (hours)</label>
-            <input id="bootstrap-ttl" type="number" value="24">
-          </div>
-          <div class="field" style="align-self:flex-end">
-            <button id="create-bootstrap-btn" class="btn btn-primary">Create token</button>
-          </div>
-        </div>
-        <pre class="output-pre" id="bootstrap-output"></pre>
-      </div>
+      <div><h2>Nodes</h2><p>Manage your V2Ray nodes</p></div>
     </div>
 
     <!-- Add Node (one-click install) -->
@@ -474,6 +505,7 @@
       <select id="node-status-filter">
         <option value="">All status</option>
         <option value="online">Online</option>
+        <option value="offline">Offline</option>
         <option value="provisioning">Provisioning</option>
         <option value="degraded">Degraded</option>
       </select>
@@ -484,8 +516,6 @@
       <button id="batch-rebuild-nodes-btn" class="btn btn-secondary btn-sm">↺ Rebuild selected</button>
       <select id="assign-group-select" multiple size="3" title="Hold Ctrl/⌘ to select multiple groups. Nothing selected = clear all groups."></select>
       <button id="assign-group-btn" class="btn btn-secondary btn-sm" title="Replaces the selected nodes' group assignments with the chosen groups">Set groups</button>
-      <select id="set-proxy-select" title="Front-end relay proxy. '— none —' clears the proxy."></select>
-      <button id="set-proxy-btn" class="btn btn-secondary btn-sm" title="Set a relay proxy for selected nodes (Clash dialer-proxy)">Set proxy</button>
       <button id="export-nodes-btn" class="btn btn-secondary btn-sm">↓ Export CSV</button>
     </div>
     <div class="table-wrap">
@@ -724,21 +754,6 @@
     </div>
   </section>
 
-  <!-- ════════════════ BOOTSTRAP TOKENS ════════════════ -->
-  <section class="tab-content" id="tab-tokens">
-    <div class="section-hd">
-      <div><h2>Bootstrap Tokens</h2><p>One-time tokens used for node registration</p></div>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr><th>Description</th><th>Expires</th><th>Used at</th><th>Created</th></tr>
-        </thead>
-        <tbody id="bootstrap-tokens-body"></tbody>
-      </table>
-    </div>
-  </section>
-
   <!-- ════════════════ LOGS & ALERTS ════════════════ -->
   <section class="tab-content" id="tab-logs">
     <div class="section-hd">
@@ -839,71 +854,40 @@
           <div class="cf-value cf-dim" id="cf-status-key">--</div>
         </div>
       </div>
-      <div class="cf-actions">
+      <div class="cf-status-actions">
         <label style="display:inline-flex;align-items:center;gap:6px;margin-right:12px;cursor:pointer">
           <input type="checkbox" id="cf-enabled-toggle" style="accent-color:var(--green)">
           <span>Enable</span>
         </label>
-        <button class="btn btn-secondary btn-sm" id="cf-discover-btn">List Distributions</button>
-        <button class="btn btn-secondary btn-sm" id="cf-scan-btn">Scan AWS</button>
-        <button class="btn btn-secondary btn-sm" id="cf-bind-btn">Bind / Create</button>
-        <button class="btn btn-secondary btn-sm" id="cf-plan-btn">Compute Drift</button>
-        <button class="btn btn-primary btn-sm" id="cf-sync-btn">Sync</button>
         <button class="btn btn-ghost btn-sm" id="cf-refresh-status-btn">Refresh</button>
       </div>
-      <pre class="output-pre" id="cf-action-output" style="display:none"></pre>
     </div>
 
-    <!-- Credentials Form -->
-    <div class="card" style="max-width:560px">
-      <div class="card-title">Credentials</div>
-      <div class="field">
-        <label for="cf-access-key">Access Key ID</label>
-        <input id="cf-access-key" placeholder="AKIA...">
-      </div>
-      <div class="field">
-        <label for="cf-secret-key">Secret Access Key</label>
-        <input id="cf-secret-key" type="password" placeholder="••••••••">
-      </div>
-      <div class="field">
-        <label for="cf-session-token">Session Token <span style="color:var(--text-muted);font-size:11px">(optional, for temporary credentials)</span></label>
-        <input id="cf-session-token" type="password" placeholder="FwoGZXIv...">
-      </div>
-      <div class="field">
-        <label for="cf-region">Region</label>
-        <input id="cf-region" placeholder="us-east-1" value="us-east-1">
-      </div>
-      <div class="field">
-        <label for="cf-custom-entry-host">Custom Entry Host <span style="color:var(--text-muted);font-size:11px">(optional)</span></label>
-        <input id="cf-custom-entry-host" placeholder="edge.example.com">
-      </div>
-      <div class="field">
-        <label for="cf-mode">Mode</label>
-        <select id="cf-mode">
-          <option value="managed">Managed</option>
-          <option value="adopted">Adopted</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="cf-distribution-select">Discovered Distributions</label>
-        <select id="cf-distribution-select">
-          <option value="">Load distributions first</option>
-        </select>
-        <div style="color:var(--text-muted);font-size:12px;margin-top:6px">
-          Select a discovered distribution to bind it. In Managed mode, leaving this empty creates a new platform-managed distribution.
+    <div class="card" id="cf-wizard" style="margin-bottom:20px">
+      <div class="card-title">Setup Wizard</div>
+      <div class="cf-wizard">
+        <div id="cf-current-setup" class="cf-current-setup" style="display:none"></div>
+        <div id="cf-stepper" class="cf-stepper">
+          <button type="button" class="cf-step-chip" data-cf-step="connect">1. Connect AWS</button>
+          <button type="button" class="cf-step-chip" data-cf-step="path">2. Choose Path</button>
+          <button type="button" class="cf-step-chip" data-cf-step="target">3. Select or Create</button>
+          <button type="button" class="cf-step-chip" data-cf-step="review">4. Review and Bind</button>
+          <button type="button" class="cf-step-chip" data-cf-step="sync">5. Check and Sync</button>
         </div>
-      </div>
-      <div class="field">
-        <label for="cf-distribution-id">Bound Distribution ID</label>
-        <input id="cf-distribution-id" placeholder="E1234567890ABC" readonly>
-      </div>
-      <div class="field">
-        <label for="cf-distribution-domain">Bound Distribution Domain</label>
-        <input id="cf-distribution-domain" placeholder="d1234.cloudfront.net" readonly>
-      </div>
-      <div style="display:flex;gap:8px;margin-top:16px">
-        <button class="btn btn-primary" id="cf-save-btn">Save credentials</button>
-        <button class="btn btn-danger" id="cf-delete-btn">Delete config</button>
+        <div id="cf-step-panels">
+          <section id="cf-step-connect" class="cf-step-panel"></section>
+          <section id="cf-step-path" class="cf-step-panel" hidden></section>
+          <section id="cf-step-target" class="cf-step-panel" hidden></section>
+          <section id="cf-step-review" class="cf-step-panel" hidden></section>
+          <section id="cf-step-sync" class="cf-step-panel" hidden></section>
+        </div>
+        <div id="cf-tech-details-wrap">
+          <div class="cf-actions-row">
+            <button type="button" class="btn btn-ghost btn-sm" id="cf-tech-toggle">Show technical details</button>
+            <span class="cf-tech-summary">Raw API responses stay available here for troubleshooting.</span>
+          </div>
+          <pre class="output-pre" id="cf-action-output" style="display:none"></pre>
+        </div>
       </div>
     </div>
   </section>
@@ -916,7 +900,6 @@
       adminPassword: document.querySelector('#admin-password'),
       legacyToken: document.querySelector('#legacy-token'),
       sessionStatus: document.querySelector('#session-status'),
-      bootstrapTokensBody: document.querySelector('#bootstrap-tokens-body'),
       nodeSearch: document.querySelector('#node-search'),
       nodeStatusFilter: document.querySelector('#node-status-filter'),
       nodeRegionFilter: document.querySelector('#node-region-filter'),
@@ -941,7 +924,6 @@
       groupGrantGroup: document.querySelector('#group-grant-group'),
       groupGrantMember: document.querySelector('#group-grant-member'),
       assignGroupSelect: document.querySelector('#assign-group-select'),
-      setProxySelect: document.querySelector('#set-proxy-select'),
     };
 
     let refreshTimer = 0;
@@ -1137,7 +1119,6 @@
         q: els.grantSearch.value,
       });
       const [
-        bootstrapTokens,
         grants,
         groupGrants,
         nodeGroups,
@@ -1153,7 +1134,6 @@
         allMembers,
         tiers,
       ] = await Promise.all([
-        apiOrEmpty('/api/admin/bootstrap-tokens'),
         apiOrEmpty(grantListURL),
         apiOrEmpty('/api/admin/node-group-grants'),
         apiOrEmpty('/api/admin/node-groups'),
@@ -1170,13 +1150,6 @@
         apiOrEmpty('/api/admin/tiers'),
       ]);
 
-      els.bootstrapTokensBody.innerHTML = '';
-      for (const token of bootstrapTokens.items) {
-        const row = document.createElement('tr');
-        row.innerHTML = `<td>${token.description}</td><td>${token.expires_at ? new Date(token.expires_at).toLocaleString() : '—'}</td><td>${token.used_at ? new Date(token.used_at).toLocaleString() : '<span class="badge badge-active">Unused</span>'}</td><td>${new Date(token.created_at).toLocaleString()}</td>`;
-        els.bootstrapTokensBody.appendChild(row);
-      }
-
       const groupNamesByNode = {};
       groupIDsByNode = {};
       for (const membership of nodeGroupMemberships.items) {
@@ -1188,13 +1161,14 @@
       const nodeByID = {};
       for (const node of nodes.items) nodeByID[node.id] = node;
 
-      // Populate proxy select dropdown
-      els.setProxySelect.innerHTML = '<option value="">— none —</option>' +
-        nodes.items.map(n => `<option value="${n.id}">${n.name}${n.region ? ' (' + n.region + ')' : ''}</option>`).join('');
-
+      const nodeOfflineAfterMs = 900_000; // 15 min, matches CONTROL_PLANE_NODE_OFFLINE_SECONDS default
+      const now = Date.now();
       els.nodesBody.innerHTML = '';
       for (const node of nodes.items) {
-        const statusBadge = `<span class="badge badge-${node.status || 'offline'}">${node.status || 'unknown'}</span>`;
+        const hb = node.last_heartbeat_at ? new Date(node.last_heartbeat_at).getTime() : 0;
+        const elapsed = hb ? now - hb : Infinity;
+        const liveStatus = elapsed > nodeOfflineAfterMs ? 'offline' : (node.status || 'online');
+        const statusBadge = `<span class="badge badge-${liveStatus}">${liveStatus}</span>`;
         const row = document.createElement('tr');
         const proxyName = node.proxy_node_id ? (nodeByID[node.proxy_node_id]?.name || node.proxy_node_id) : '—';
         row.innerHTML = `<td class="checkbox-cell"><input type="checkbox" data-node-select="${node.id}"></td><td><strong>${node.name}</strong></td><td>${statusBadge}</td><td>${node.region}</td><td style="color:var(--text-dim)">${node.public_host || '—'}</td><td style="color:var(--text-dim)">${(node.tags || []).join(', ') || '—'}</td><td style="color:var(--text-dim)">${(groupNamesByNode[node.id] || []).join(', ') || '—'}</td><td style="color:var(--text-dim)">${proxyName}</td><td style="color:var(--text-muted)">${node.current_config_version}</td><td><button class="btn btn-secondary btn-xs" data-node-rebuild="${node.id}">↺ Rebuild</button> <button class="btn btn-secondary btn-xs" data-node-config="${node.id}" data-node-name="${encodeURIComponent(node.name)}">Config</button> <button class="btn btn-danger btn-xs" data-node-delete="${node.id}" data-node-name="${encodeURIComponent(node.name)}">✕</button></td>`;
@@ -1351,22 +1325,6 @@
         await refreshDashboard();
       } catch (error) {
         alert(error.message);
-      }
-    });
-
-    document.querySelector('#create-bootstrap-btn').addEventListener('click', async () => {
-      try {
-        const payload = await api('/api/admin/bootstrap-tokens', {
-          method: 'POST',
-          body: JSON.stringify({
-            description: document.querySelector('#bootstrap-description').value,
-            ttl_hours: Number(document.querySelector('#bootstrap-ttl').value),
-          }),
-        });
-        writeJSON('#bootstrap-output', payload);
-        await refreshDashboard();
-      } catch (error) {
-        writeJSON('#bootstrap-output', { error: error.message });
       }
     });
 
@@ -1548,24 +1506,6 @@
         await Promise.all(nodeIDs.map(nodeID => api(`/api/admin/nodes/${nodeID}/groups`, {
           method: 'POST',
           body: JSON.stringify({ group_ids: [...els.assignGroupSelect.selectedOptions].map(o => o.value) }),
-        })));
-        await refreshDashboard();
-      } catch (error) {
-        alert(error.message);
-      }
-    });
-
-    document.querySelector('#set-proxy-btn').addEventListener('click', async () => {
-      const nodeIDs = selectedValues('data-node-select');
-      if (nodeIDs.length === 0) {
-        alert('Select at least one node.');
-        return;
-      }
-      const proxyNodeID = els.setProxySelect.value; // empty string = clear
-      try {
-        await Promise.all(nodeIDs.map(nodeID => api(`/api/admin/nodes/${nodeID}/proxy`, {
-          method: 'POST',
-          body: JSON.stringify({ proxy_node_id: proxyNodeID }),
         })));
         await refreshDashboard();
       } catch (error) {
@@ -1956,10 +1896,135 @@
     updateLoginOverlay();
 
     // ── CloudFront admin ──
+    const cloudFrontWizard = {
+      step: 'connect',
+      path: '',
+      selectedDistributionId: '',
+      detailsOpen: false,
+      hasExistingConfig: false,
+      currentSetupDismissed: false,
+      credentialsMode: 'existing',
+      config: null,
+      review: null,
+      bindResult: null,
+      plan: null,
+      sync: null,
+      error: '',
+      form: {
+        accessKeyId: '',
+        secretAccessKey: '',
+        sessionToken: '',
+        region: 'us-east-1',
+        customEntryHost: '',
+        mode: 'managed',
+        distributionId: '',
+        distributionDomainName: '',
+      },
+    };
+
+    const cloudFrontStepOrder = ['connect', 'path', 'target', 'review', 'sync'];
+
+    function getCloudFrontFieldValue(id) {
+      return document.getElementById(id)?.value ?? '';
+    }
+
+    function captureCloudFrontDraftFromDom() {
+      const fields = ['cf-access-key', 'cf-secret-key', 'cf-session-token', 'cf-region', 'cf-custom-entry-host', 'cf-mode', 'cf-distribution-id', 'cf-distribution-domain'];
+      const anyField = fields.some((id) => document.getElementById(id));
+      if (!anyField) return;
+      cloudFrontWizard.form = {
+        accessKeyId: getCloudFrontFieldValue('cf-access-key').trim(),
+        secretAccessKey: getCloudFrontFieldValue('cf-secret-key'),
+        sessionToken: getCloudFrontFieldValue('cf-session-token'),
+        region: getCloudFrontFieldValue('cf-region').trim() || 'us-east-1',
+        customEntryHost: getCloudFrontFieldValue('cf-custom-entry-host').trim(),
+        mode: getCloudFrontFieldValue('cf-mode') || cloudFrontWizard.form.mode || 'managed',
+        distributionId: getCloudFrontFieldValue('cf-distribution-id').trim(),
+        distributionDomainName: getCloudFrontFieldValue('cf-distribution-domain').trim(),
+      };
+    }
+
+    function writeCloudFrontOutput(value) {
+      const outputEl = document.getElementById('cf-action-output');
+      outputEl.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      outputEl.style.display = cloudFrontWizard.detailsOpen ? 'block' : 'none';
+    }
+
+    function setCloudFrontError(message = '') {
+      cloudFrontWizard.error = message;
+      renderCloudFrontWizard();
+    }
+
+    function resetCloudFrontWizardState() {
+      cloudFrontWizard.step = 'connect';
+      cloudFrontWizard.path = '';
+      cloudFrontWizard.selectedDistributionId = '';
+      cloudFrontWizard.currentSetupDismissed = false;
+      cloudFrontWizard.credentialsMode = 'existing';
+      cloudFrontWizard.review = null;
+      cloudFrontWizard.bindResult = null;
+      cloudFrontWizard.plan = null;
+      cloudFrontWizard.sync = null;
+      cloudFrontWizard.error = '';
+      cloudFrontWizard.form = {
+        accessKeyId: '',
+        secretAccessKey: '',
+        sessionToken: '',
+        region: 'us-east-1',
+        customEntryHost: '',
+        mode: 'managed',
+        distributionId: '',
+        distributionDomainName: '',
+      };
+    }
+
+    function clearCloudFrontDownstream(fromStep = 'path') {
+      const index = cloudFrontStepOrder.indexOf(fromStep);
+      if (index <= 1) cloudFrontWizard.selectedDistributionId = '';
+      if (index <= 2) {
+        cloudFrontWizard.review = null;
+        cloudFrontWizard.bindResult = null;
+      }
+      if (index <= 3) {
+        cloudFrontWizard.plan = null;
+        cloudFrontWizard.sync = null;
+      }
+    }
+
+    function setCloudFrontStep(step) {
+      cloudFrontWizard.step = step;
+      renderCloudFrontWizard();
+    }
+
+    function canNavigateCloudFrontStep(step) {
+      if (!cloudFrontStepOrder.includes(step)) return false;
+      if (!cloudFrontWizard.currentSetupDismissed && !!cloudFrontWizard.config?.distributionId) return false;
+      const targetIndex = cloudFrontStepOrder.indexOf(step);
+      const activeIndex = cloudFrontStepOrder.indexOf(cloudFrontWizard.step);
+      return targetIndex <= activeIndex;
+    }
+
+    function navigateCloudFrontStep(step) {
+      if (!canNavigateCloudFrontStep(step)) return;
+      setCloudFrontStep(step);
+    }
+
+    function findCloudFrontDistribution(distributionID) {
+      return cloudFrontDistributions.find((item) => item.distributionId === distributionID) || null;
+    }
+
+    function applyCloudFrontSelection(distributionID = '') {
+      cloudFrontWizard.selectedDistributionId = distributionID;
+      const selected = findCloudFrontDistribution(distributionID);
+      cloudFrontWizard.form.distributionId = distributionID || '';
+      cloudFrontWizard.form.distributionDomainName = selected?.domainName || cloudFrontWizard.config?.distributionDomainName || '';
+    }
+
     function renderCloudFrontDistributions(selectedID = '') {
       const select = document.getElementById('cf-distribution-select');
+      if (!select) return;
       if (!cloudFrontDistributions.length) {
-        select.innerHTML = '<option value="">Load distributions first</option>';
+        select.innerHTML = '<option value="">No distributions loaded</option>';
         return;
       }
       const options = cloudFrontDistributions.map((item) => {
@@ -1969,150 +2034,629 @@
         return `<option value="${item.distributionId}"${selected}>${escapeHtml(label)}</option>`;
       });
       select.innerHTML = `<option value="">Select a distribution</option>${options.join('')}`;
-      if (!selectedID) select.value = '';
+      if (selectedID) select.value = selectedID;
     }
 
     async function loadCloudFrontDistributions(selectedID = '') {
-      const outputEl = document.getElementById('cf-action-output');
-      outputEl.style.display = 'block';
-      outputEl.textContent = 'Loading distributions…';
+      writeCloudFrontOutput('Loading distributions…');
       try {
         const result = await api('/api/admin/cloudfront/distributions');
         cloudFrontDistributions = result.items || [];
         renderCloudFrontDistributions(selectedID);
-        outputEl.textContent = JSON.stringify(result, null, 2);
+        writeCloudFrontOutput(result);
         toast(`Loaded ${cloudFrontDistributions.length} distributions`);
+        renderCloudFrontWizard();
+        return result;
       } catch (error) {
         cloudFrontDistributions = [];
         renderCloudFrontDistributions();
-        outputEl.textContent = `Error: ${error.message}`;
+        writeCloudFrontOutput(`Error: ${error.message}`);
         toast(error.message, 'error');
+        renderCloudFrontWizard();
+        throw error;
       }
+    }
+
+    function renderCloudFrontCurrentSetup(cfg) {
+      const wrap = document.getElementById('cf-current-setup');
+      if (!cfg?.distributionId || cloudFrontWizard.currentSetupDismissed) {
+        wrap.style.display = 'none';
+        wrap.innerHTML = '';
+        return;
+      }
+      wrap.style.display = 'grid';
+      wrap.innerHTML = `
+        <div class="cf-choice-card">
+          <div class="cf-step-copy">
+            <h3>Current setup</h3>
+            <p>Currently bound to ${escapeHtml(cfg.distributionId)} on ${escapeHtml(cfg.distributionDomainName || 'the selected distribution')}.</p>
+          </div>
+          <div class="cf-actions-row">
+            <button class="btn btn-secondary btn-sm" id="cf-keep-current-btn">Keep current setup</button>
+            <button class="btn btn-primary btn-sm" id="cf-change-setup-btn">Change CloudFront setup</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderCloudFrontWizard() {
+      captureCloudFrontDraftFromDom();
+      renderCloudFrontCurrentSetup(cloudFrontWizard.config);
+
+      const activeIndex = cloudFrontStepOrder.indexOf(cloudFrontWizard.step);
+      document.querySelectorAll('#cf-stepper [data-cf-step]').forEach((button, index) => {
+        const step = button.dataset.cfStep;
+        const isActive = step === cloudFrontWizard.step;
+        const isDone = index < activeIndex;
+        button.classList.toggle('is-active', isActive);
+        button.classList.toggle('is-done', isDone);
+        button.disabled = !canNavigateCloudFrontStep(step);
+      });
+
+      const showWizard = cloudFrontWizard.currentSetupDismissed || !cloudFrontWizard.config?.distributionId;
+      document.getElementById('cf-stepper').style.display = showWizard ? 'flex' : 'none';
+
+      const sections = {
+        connect: document.getElementById('cf-step-connect'),
+        path: document.getElementById('cf-step-path'),
+        target: document.getElementById('cf-step-target'),
+        review: document.getElementById('cf-step-review'),
+        sync: document.getElementById('cf-step-sync'),
+      };
+      sections.connect.innerHTML = renderCloudFrontConnectStep();
+      sections.path.innerHTML = renderCloudFrontPathStep();
+      sections.target.innerHTML = renderCloudFrontTargetStep();
+      sections.review.innerHTML = renderCloudFrontReviewStep();
+      sections.sync.innerHTML = renderCloudFrontSyncStep();
+
+      for (const [name, section] of Object.entries(sections)) {
+        section.hidden = !(showWizard && name === cloudFrontWizard.step);
+      }
+
+      const techWrap = document.getElementById('cf-tech-details-wrap');
+      techWrap.classList.toggle('cf-tech-open', cloudFrontWizard.detailsOpen);
+      document.getElementById('cf-tech-toggle').textContent = cloudFrontWizard.detailsOpen ? 'Hide technical details' : 'Show technical details';
+      document.getElementById('cf-action-output').style.display = cloudFrontWizard.detailsOpen ? 'block' : 'none';
+
+      const select = document.getElementById('cf-distribution-select');
+      if (select) {
+        renderCloudFrontDistributions(cloudFrontWizard.selectedDistributionId || cloudFrontWizard.form.distributionId || cloudFrontWizard.config?.distributionId || '');
+      }
+    }
+
+    function renderCloudFrontConnectStep() {
+      const cfg = cloudFrontWizard.config || {};
+      const usingExisting = cloudFrontWizard.hasExistingConfig && cloudFrontWizard.credentialsMode === 'existing';
+      const errorHTML = cloudFrontWizard.error ? `<div class="cf-inline-error">${escapeHtml(cloudFrontWizard.error)}</div>` : '';
+      return `
+        <div class="cf-step-copy">
+          <h3>Connect AWS</h3>
+          <p>Connect the AWS access key pair, then load available CloudFront distributions.</p>
+        </div>
+        ${cloudFrontWizard.hasExistingConfig ? `
+          <div class="cf-choice-grid">
+            <button type="button" class="cf-choice-card ${usingExisting ? 'is-selected' : ''}" id="cf-use-existing-credentials">
+              <h4>Use existing credentials</h4>
+              <p>Continue with ${escapeHtml(cfg.accessKeyId || 'the saved access key')} and run a fresh distribution discovery.</p>
+            </button>
+            <button type="button" class="cf-choice-card ${usingExisting ? '' : 'is-selected'}" id="cf-replace-credentials">
+              <h4>Replace credentials</h4>
+              <p>Enter a new access key pair before continuing.</p>
+            </button>
+          </div>
+        ` : ''}
+        ${errorHTML}
+        <div class="field">
+          <label for="cf-access-key">Access Key ID</label>
+          <input id="cf-access-key" placeholder="AKIA..." value="${usingExisting ? '' : escapeHtml(cloudFrontWizard.form.accessKeyId)}" ${usingExisting ? 'disabled' : ''}>
+        </div>
+        <div class="field">
+          <label for="cf-secret-key">Secret Access Key</label>
+          <input id="cf-secret-key" type="password" placeholder="••••••••" value="${usingExisting ? '' : escapeHtml(cloudFrontWizard.form.secretAccessKey)}" ${usingExisting ? 'disabled' : ''}>
+        </div>
+        <div class="field">
+          <label for="cf-session-token">Session Token <span style="color:var(--text-muted);font-size:11px">(optional, for temporary credentials)</span></label>
+          <input id="cf-session-token" type="password" placeholder="FwoGZXIv..." value="${usingExisting ? '' : escapeHtml(cloudFrontWizard.form.sessionToken)}" ${usingExisting ? 'disabled' : ''}>
+        </div>
+        <div class="cf-actions-row">
+          <button class="btn btn-primary" id="cf-connect-continue-btn">Connect and continue</button>
+          <button class="btn btn-danger" id="cf-delete-btn">Delete config</button>
+        </div>
+      `;
+    }
+
+    function renderCloudFrontDeliverySettings() {
+      return `
+        <div class="cf-choice-card">
+          <h4>Delivery settings</h4>
+          <div class="field">
+            <label for="cf-region">Region</label>
+            <input id="cf-region" placeholder="us-east-1" value="${escapeHtml(cloudFrontWizard.form.region || 'us-east-1')}">
+          </div>
+          <div class="field">
+            <label for="cf-custom-entry-host">Custom Entry Host <span style="color:var(--text-muted);font-size:11px">(optional)</span></label>
+            <input id="cf-custom-entry-host" placeholder="edge.example.com" value="${escapeHtml(cloudFrontWizard.form.customEntryHost)}">
+          </div>
+        </div>
+      `;
+    }
+
+    function renderCloudFrontPathStep() {
+      return `
+        <div class="cf-step-copy">
+          <h3>Choose setup path</h3>
+          <p>Pick whether to switch to an existing distribution or create and switch to a new managed distribution.</p>
+        </div>
+        ${cloudFrontWizard.error ? `<div class="cf-inline-error">${escapeHtml(cloudFrontWizard.error)}</div>` : ''}
+        ${renderCloudFrontDeliverySettings()}
+        <div class="cf-choice-grid">
+          <button type="button" class="cf-choice-card" id="cf-path-existing">
+            <h4>Use existing distribution</h4>
+            <p>Scan discovered distributions and switch the current binding to one of them.</p>
+          </button>
+          <button type="button" class="cf-choice-card" id="cf-path-managed">
+            <h4>Create new managed distribution</h4>
+            <p>Let the platform create and then switch to a new managed distribution.</p>
+          </button>
+        </div>
+      `;
+    }
+
+    function renderCloudFrontTargetStep() {
+      if (cloudFrontWizard.path === 'existing') {
+        if (!cloudFrontDistributions.length) {
+          return `
+            <div class="cf-step-copy">
+              <h3>No existing distributions found</h3>
+              <p>This account does not currently expose any candidate distributions.</p>
+            </div>
+            ${cloudFrontWizard.error ? `<div class="cf-inline-error">${escapeHtml(cloudFrontWizard.error)}</div>` : ''}
+            <div class="cf-actions-row">
+              <button class="btn btn-primary" id="cf-switch-to-managed-btn">Create a managed distribution instead</button>
+            </div>
+          `;
+        }
+        return `
+          <div class="cf-step-copy">
+            <h3>Select an existing distribution</h3>
+            <p>Choose the distribution to adopt as the single active CloudFront target.</p>
+          </div>
+          ${cloudFrontWizard.error ? `<div class="cf-inline-error">${escapeHtml(cloudFrontWizard.error)}</div>` : ''}
+          <div class="field">
+            <label for="cf-distribution-select">Discovered Distributions</label>
+            <select id="cf-distribution-select">
+              <option value="">Select a distribution</option>
+            </select>
+            <div class="cf-inline-note">Switching the selected distribution clears bind, drift, and sync results.</div>
+          </div>
+          <div class="cf-actions-row">
+            <button class="btn btn-primary" id="cf-use-existing-btn">Use selected distribution</button>
+            <button class="btn btn-secondary" id="cf-back-to-path-btn">Back</button>
+          </div>
+        `;
+      }
+      return `
+        <div class="cf-step-copy">
+          <h3>Create a new managed distribution</h3>
+          <p>The platform will create and then switch to a new managed distribution.</p>
+        </div>
+        ${cloudFrontWizard.error ? `<div class="cf-inline-error">${escapeHtml(cloudFrontWizard.error)}</div>` : ''}
+        <div class="cf-choice-card">
+          <h4>Create and switch to a new managed distribution</h4>
+          <p>Use the current routable nodes to create the target distribution, then review it before final bind confirmation.</p>
+        </div>
+        <div class="cf-actions-row">
+          <button class="btn btn-primary" id="cf-create-managed-btn">Create distribution</button>
+          <button class="btn btn-secondary" id="cf-back-to-path-btn">Back</button>
+        </div>
+      `;
+    }
+
+    function renderCloudFrontReviewStep() {
+      const selectedID = cloudFrontWizard.selectedDistributionId || cloudFrontWizard.form.distributionId || cloudFrontWizard.config?.distributionId || '';
+      const selected = findCloudFrontDistribution(selectedID);
+      const review = cloudFrontWizard.review;
+      const bind = cloudFrontWizard.bindResult;
+      const originsCount = Array.isArray(review?.origins) ? review.origins.length : 0;
+      const configuredOriginsCount = Array.isArray(review?.distributionOrigins) ? review.distributionOrigins.length : 0;
+      const cacheBehaviorCount = Array.isArray(review?.cacheBehaviors) ? review.cacheBehaviors.length : 0;
+      const parameterCount = Array.isArray(review?.parameters) ? review.parameters.length : 0;
+      return `
+        <div class="cf-step-copy">
+          <h3>Review and Bind</h3>
+          <p>Confirm the selected distribution, review scanned origins, and then bind it as the active CloudFront target.</p>
+        </div>
+        ${cloudFrontWizard.error ? `<div class="cf-inline-error">${escapeHtml(cloudFrontWizard.error)}</div>` : ''}
+        <div class="cf-detail-grid">
+          <div class="cf-detail-card">
+            <h4>Distribution ID</h4>
+            <p>${escapeHtml(review?.distributionId || selectedID || '--')}</p>
+          </div>
+          <div class="cf-detail-card">
+            <h4>Domain Name</h4>
+            <p>${escapeHtml(review?.domainName || selected?.domainName || cloudFrontWizard.form.distributionDomainName || '--')}</p>
+          </div>
+          <div class="cf-detail-card">
+            <h4>Origin summary</h4>
+            <p>${originsCount ? `${originsCount} scanned origins` : 'Scan runs automatically before review'}</p>
+          </div>
+          <div class="cf-detail-card">
+            <h4>Node matching summary</h4>
+            <p>${bind ? `${bind.matchedCount} matched / ${bind.unmatchedCount} unmatched` : 'Binding not confirmed yet'}</p>
+          </div>
+          <div class="cf-detail-card">
+            <h4>Origins</h4>
+            <p>${configuredOriginsCount ? `${configuredOriginsCount} configured origins` : 'No configured origins returned'}</p>
+          </div>
+          <div class="cf-detail-card">
+            <h4>Cache behaviors</h4>
+            <p>${cacheBehaviorCount ? `${cacheBehaviorCount} configured behaviors` : 'No cache behaviors returned'}</p>
+          </div>
+          <div class="cf-detail-card">
+            <h4>Parameters</h4>
+            <p>${parameterCount ? `${parameterCount} tenant parameters` : 'No tenant parameters defined'}</p>
+          </div>
+        </div>
+        <div class="cf-actions-row">
+          <button class="btn btn-primary" id="cf-bind-distribution-btn">Bind distribution</button>
+          <button class="btn btn-secondary" id="cf-back-to-target-btn">Back</button>
+        </div>
+      `;
+    }
+
+    function renderCloudFrontSyncStep() {
+      const plan = cloudFrontWizard.plan;
+      const sync = cloudFrontWizard.sync;
+      const conflict = plan?.driftStatus === 'conflict';
+      const actions = Array.isArray(plan?.actions) ? plan.actions : [];
+      const actionableActions = actions.filter((item) => item?.action && item.action !== 'noop');
+      const rewrites = Array.isArray(plan?.rewriteRoutes) ? plan.rewriteRoutes : [];
+      const actionSummary = actions.length ? actions.map((item) => {
+        if (item.action === 'noop') {
+          return item.reason || 'distribution is in sync';
+        }
+        return `${item.action}: ${item.routeKey || item.reason || ''}`.trim();
+      }).join('\n') : 'No plan computed yet.';
+      const rewriteSummary = rewrites.length ? rewrites.map((item) => {
+        const cloudFrontPath = `/${String(item.routeKey || '').replace(/^\/+/, '')}`;
+        const websocketPath = String(item.path || '');
+        return `${cloudFrontPath} -> ${websocketPath}`;
+      }).join('\n') : 'No websocket path rewrites planned.';
+      return `
+        <div class="cf-step-copy">
+          <h3>Check Changes and Sync</h3>
+          <p>Review drift, re-check changes when needed, and apply the final CloudFront sync once the plan is safe.</p>
+        </div>
+        ${cloudFrontWizard.error ? `<div class="cf-inline-error">${escapeHtml(cloudFrontWizard.error)}</div>` : ''}
+        ${conflict ? `<div class="cf-inline-error">CloudFront sync is currently blocked: ${escapeHtml(actions.find((item) => item.action === 'conflict')?.reason || 'conflict detected in the distribution plan')}</div>` : ''}
+        <div class="cf-detail-grid">
+          <div class="cf-detail-card">
+            <h4>Drift status</h4>
+            <p>${escapeHtml(plan?.driftStatus || 'pending')}</p>
+          </div>
+          <div class="cf-detail-card">
+            <h4>Plan actions</h4>
+            <p>${actionableActions.length ? `${actionableActions.length} route changes` : 'No pending route changes'}</p>
+          </div>
+          <div class="cf-detail-card">
+            <h4>Sync readiness</h4>
+            <p>${conflict ? 'Blocked by conflict' : 'Ready when the plan looks correct'}</p>
+          </div>
+          <div class="cf-detail-card">
+            <h4>Last sync result</h4>
+            <p>${escapeHtml(sync?.syncStatus || cloudFrontWizard.config?.syncStatus || '--')}</p>
+          </div>
+        </div>
+        <div class="cf-choice-card">
+          <h4>Planned route actions</h4>
+          <pre class="output-pre" style="margin-top:0;max-height:180px">${escapeHtml(actionSummary)}</pre>
+        </div>
+        <div class="cf-choice-card">
+          <h4>CloudFront path -> WebSocket path</h4>
+          <pre class="output-pre" style="margin-top:0;max-height:180px">${escapeHtml(rewriteSummary)}</pre>
+        </div>
+        <div class="cf-actions-row">
+          <button class="btn btn-primary" id="cf-apply-sync-btn" ${conflict ? 'disabled' : ''}>Apply to CloudFront</button>
+          <button class="btn btn-secondary" id="cf-recheck-changes-btn">Re-check changes</button>
+        </div>
+      `;
     }
 
     async function loadCloudFrontConfig() {
       try {
         const cfg = await api('/api/admin/cloudfront/config');
+        cloudFrontWizard.config = cfg;
+        cloudFrontWizard.hasExistingConfig = !!cfg.accessKeyId;
         document.getElementById('cf-status-enabled').textContent = cfg.enabled ? 'Yes' : 'No';
         document.getElementById('cf-status-enabled').style.color = cfg.enabled ? 'var(--green)' : 'var(--text-muted)';
         document.getElementById('cf-enabled-toggle').checked = !!cfg.enabled;
         document.getElementById('cf-status-dist-id').textContent = cfg.distributionId || '--';
         document.getElementById('cf-status-domain').textContent = cfg.distributionDomainName || '--';
         document.getElementById('cf-status-sync').textContent = cfg.syncStatus || '--';
-        document.getElementById('cf-status-sync').style.color = cfg.syncStatus === 'synced' ? 'var(--green)' : cfg.syncStatus === 'drift' ? 'var(--yellow)' : 'var(--text)';
-        document.getElementById('cf-status-drift').textContent = cfg.driftStatus === 'drifted' ? 'Yes' : 'No';
-        document.getElementById('cf-status-drift').style.color = cfg.driftStatus === 'drifted' ? 'var(--yellow)' : 'var(--green)';
+        document.getElementById('cf-status-sync').style.color = cfg.syncStatus === 'synced' ? 'var(--green)' : cfg.syncStatus === 'failed' ? 'var(--red)' : 'var(--text)';
+        document.getElementById('cf-status-drift').textContent = cfg.driftStatus === 'conflict' ? 'Conflict' : cfg.driftStatus === 'drifted' ? 'Drifted' : 'In sync';
+        document.getElementById('cf-status-drift').style.color = cfg.driftStatus === 'conflict' ? 'var(--red)' : cfg.driftStatus === 'drifted' ? 'var(--yellow)' : 'var(--green)';
         document.getElementById('cf-status-last-sync').textContent = cfg.lastSyncedAt ? new Date(cfg.lastSyncedAt).toLocaleString() : '--';
         document.getElementById('cf-status-key').textContent = cfg.accessKeyId || '--';
         cloudFrontReady = !!(cfg.enabled && cfg.distributionId && cfg.lastSuccessfulSyncAt && cfg.syncStatus !== 'failed' && !['drifted', 'conflict'].includes(cfg.driftStatus));
-        document.getElementById('cf-region').value = cfg.region || 'us-east-1';
-        document.getElementById('cf-custom-entry-host').value = cfg.customEntryHost || '';
-        document.getElementById('cf-mode').value = cfg.mode || 'managed';
-        document.getElementById('cf-distribution-id').value = cfg.distributionId || '';
-        document.getElementById('cf-distribution-domain').value = cfg.distributionDomainName || '';
+        cloudFrontWizard.form = {
+          accessKeyId: '',
+          secretAccessKey: '',
+          sessionToken: '',
+          region: cfg.region || 'us-east-1',
+          customEntryHost: cfg.customEntryHost || '',
+          mode: cfg.mode || 'managed',
+          distributionId: cfg.distributionId || '',
+          distributionDomainName: cfg.distributionDomainName || '',
+        };
+        if (!cloudFrontWizard.currentSetupDismissed && cfg.distributionId) {
+          cloudFrontWizard.step = 'connect';
+        }
+        if (!cloudFrontWizard.selectedDistributionId && cfg.distributionId) {
+          cloudFrontWizard.selectedDistributionId = cfg.distributionId;
+        }
         renderCloudFrontDistributions(cfg.distributionId || '');
+        renderCloudFrontWizard();
         if (Array.isArray(window.__membersCache) && window.__membersCache.length) renderMembers(window.__membersCache);
       } catch (error) {
         if (error.status !== 404) {
           console.error('Failed to load CloudFront config:', error);
         }
+        resetCloudFrontWizardState();
+        cloudFrontWizard.config = null;
+        cloudFrontWizard.hasExistingConfig = false;
         document.getElementById('cf-status-enabled').textContent = 'Not configured';
         document.getElementById('cf-status-enabled').style.color = 'var(--text-muted)';
+        document.getElementById('cf-status-dist-id').textContent = '--';
+        document.getElementById('cf-status-domain').textContent = '--';
+        document.getElementById('cf-status-sync').textContent = '--';
+        document.getElementById('cf-status-drift').textContent = '--';
+        document.getElementById('cf-status-last-sync').textContent = '--';
+        document.getElementById('cf-status-key').textContent = '--';
         cloudFrontReady = false;
-        renderCloudFrontDistributions();
+        cloudFrontDistributions = [];
+        renderCloudFrontWizard();
         if (Array.isArray(window.__membersCache) && window.__membersCache.length) renderMembers(window.__membersCache);
       }
     }
 
-    async function saveCloudFrontConfig() {
+    async function saveCloudFrontConfig(overrides = null) {
+      captureCloudFrontDraftFromDom();
+      if (overrides && typeof overrides === 'object') {
+        cloudFrontWizard.form = {
+          ...cloudFrontWizard.form,
+          ...overrides,
+        };
+      }
+      const usingExisting = cloudFrontWizard.hasExistingConfig && cloudFrontWizard.credentialsMode === 'existing';
       const data = {
-        accessKeyId: document.getElementById('cf-access-key').value.trim(),
-        secretAccessKey: document.getElementById('cf-secret-key').value,
-        region: document.getElementById('cf-region').value.trim() || 'us-east-1',
-        customEntryHost: document.getElementById('cf-custom-entry-host').value.trim(),
-        mode: document.getElementById('cf-mode').value,
-        distributionId: document.getElementById('cf-distribution-id').value.trim(),
-        distributionDomainName: document.getElementById('cf-distribution-domain').value.trim(),
+        accessKeyId: usingExisting ? '' : cloudFrontWizard.form.accessKeyId,
+        secretAccessKey: usingExisting ? '' : cloudFrontWizard.form.secretAccessKey,
+        region: cloudFrontWizard.form.region || 'us-east-1',
+        customEntryHost: cloudFrontWizard.form.customEntryHost,
+        mode: cloudFrontWizard.form.mode || 'managed',
+        distributionId: cloudFrontWizard.form.distributionId,
+        distributionDomainName: cloudFrontWizard.form.distributionDomainName,
       };
-      const sessionToken = document.getElementById('cf-session-token').value;
-      if (sessionToken) data.sessionToken = sessionToken;
-      if ((!data.accessKeyId || !data.secretAccessKey) && !document.getElementById('cf-status-key').textContent.startsWith('****')) {
-        toast('Access Key ID and Secret Access Key are required for initial setup.', 'error');
-        return;
+      if (!usingExisting && cloudFrontWizard.form.sessionToken) data.sessionToken = cloudFrontWizard.form.sessionToken;
+      if ((!data.accessKeyId || !data.secretAccessKey) && !usingExisting) {
+        throw new Error('Access Key ID and Secret Access Key are required for initial setup.');
       }
-      try {
-        await api('/api/admin/cloudfront/config', {
-          method: 'POST',
-          body: JSON.stringify(data),
-        });
-        toast('CloudFront config saved');
-        document.getElementById('cf-access-key').value = '';
-        document.getElementById('cf-secret-key').value = '';
-        document.getElementById('cf-session-token').value = '';
-        await loadCloudFrontConfig();
-      } catch (error) {
-        toast(error.message, 'error');
-      }
+      await api('/api/admin/cloudfront/config', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      cloudFrontWizard.credentialsMode = 'existing';
+      cloudFrontWizard.error = '';
+      toast('CloudFront config saved');
+      await loadCloudFrontConfig();
+    }
+
+    async function persistCloudFrontPathSettings(overrides = {}) {
+      await saveCloudFrontConfig({
+        mode: cloudFrontWizard.form.mode || 'managed',
+        customEntryHost: cloudFrontWizard.form.customEntryHost,
+        region: cloudFrontWizard.form.region || 'us-east-1',
+        ...overrides,
+      });
+    }
+
+    async function persistCloudFrontManagedCreateState() {
+      cloudFrontWizard.form.mode = 'managed';
+      cloudFrontWizard.form.distributionId = '';
+      cloudFrontWizard.form.distributionDomainName = '';
+      cloudFrontWizard.selectedDistributionId = '';
+      await saveCloudFrontConfig({
+        mode: 'managed',
+        distributionId: '',
+        distributionDomainName: '',
+      });
     }
 
     async function deleteCloudFrontConfig() {
       if (!confirm('Delete CloudFront configuration? This will not remove the AWS distribution.')) return;
+      await api('/api/admin/cloudfront/config', { method: 'DELETE' });
+      toast('CloudFront config deleted');
+      resetCloudFrontWizardState();
+      await loadCloudFrontConfig();
+      renderCloudFrontWizard();
+    }
+
+    async function connectCloudFrontWizard() {
       try {
-        await api('/api/admin/cloudfront/config', { method: 'DELETE' });
-        toast('CloudFront config deleted');
-        await loadCloudFrontConfig();
+        cloudFrontWizard.error = '';
+        await saveCloudFrontConfig();
+        await loadCloudFrontDistributions(cloudFrontWizard.form.distributionId.trim());
+        cloudFrontWizard.currentSetupDismissed = true;
+        setCloudFrontStep('path');
       } catch (error) {
+        setCloudFrontError(error.message);
         toast(error.message, 'error');
       }
     }
 
-    async function cloudFrontAction(action, label) {
-      const outputEl = document.getElementById('cf-action-output');
-      outputEl.style.display = 'block';
-      outputEl.textContent = `${label}…`;
-      try {
-        const result = await api(`/api/admin/cloudfront/${action}`, { method: 'POST' });
-        outputEl.textContent = JSON.stringify(result, null, 2);
-        toast(`${label} completed`);
-        await loadCloudFrontConfig();
-      } catch (error) {
-        outputEl.textContent = `Error: ${error.message}`;
-        toast(error.message, 'error');
-      }
+    async function keepCurrentCloudFrontSetup() {
+      cloudFrontWizard.currentSetupDismissed = true;
+      cloudFrontWizard.error = '';
+      clearCloudFrontDownstream('review');
+      renderCloudFrontWizard();
+      await prepareCloudFrontSyncStep();
     }
 
-    async function bindCloudFrontDistribution() {
-      const selectedID = document.getElementById('cf-distribution-select').value.trim() || document.getElementById('cf-distribution-id').value.trim();
-      const mode = document.getElementById('cf-mode').value;
-      if (!selectedID && mode !== 'managed') {
-        toast('Select a distribution first, or switch to Managed mode to create one.', 'error');
+    function chooseChangeCloudFrontSetup() {
+      cloudFrontWizard.currentSetupDismissed = true;
+      cloudFrontWizard.credentialsMode = 'existing';
+      clearCloudFrontDownstream('path');
+      setCloudFrontStep('connect');
+    }
+
+    function chooseCloudFrontPath(path) {
+      cloudFrontWizard.path = path;
+      clearCloudFrontDownstream('target');
+      if (path === 'managed') {
+        cloudFrontWizard.form.mode = 'managed';
+      } else if (cloudFrontWizard.form.mode === 'managed') {
+        cloudFrontWizard.form.mode = 'adopted';
+      }
+      setCloudFrontStep('target');
+    }
+
+    function switchToManagedFallback() {
+      chooseCloudFrontPath('managed');
+    }
+
+    async function useSelectedCloudFrontDistribution() {
+      const selectedID = document.getElementById('cf-distribution-select')?.value.trim();
+      if (!selectedID) {
+        setCloudFrontError('Select a distribution first.');
         return;
       }
-      const outputEl = document.getElementById('cf-action-output');
-      outputEl.style.display = 'block';
-      outputEl.textContent = selectedID ? 'Binding distribution…' : 'No distribution selected in Managed mode; creating a new distribution…';
+      cloudFrontWizard.error = '';
+      applyCloudFrontSelection(selectedID);
+      clearCloudFrontDownstream('review');
+      await persistCloudFrontPathSettings({ mode: 'adopted' });
+      await prepareCloudFrontReviewStep();
+    }
+
+    async function createManagedCloudFrontDistribution() {
+      cloudFrontWizard.error = '';
+      cloudFrontWizard.form.mode = 'managed';
+      writeCloudFrontOutput('Creating managed distribution…');
+      try {
+        await persistCloudFrontManagedCreateState();
+        const result = await api('/api/admin/cloudfront/bind', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        cloudFrontWizard.bindResult = result;
+        writeCloudFrontOutput(result);
+        toast('Managed distribution created and bound');
+        await loadCloudFrontConfig();
+        applyCloudFrontSelection(cloudFrontWizard.config?.distributionId || '');
+        await prepareCloudFrontReviewStep();
+      } catch (error) {
+        setCloudFrontError(error.message);
+        writeCloudFrontOutput(`Error: ${error.message}`);
+        toast(error.message, 'error');
+      }
+    }
+
+    async function prepareCloudFrontReviewStep() {
+      const selectedID = cloudFrontWizard.selectedDistributionId || cloudFrontWizard.form.distributionId.trim();
+      const body = selectedID ? { distributionId: selectedID } : {};
+      writeCloudFrontOutput(selectedID ? 'Scanning selected distribution…' : 'Scanning distribution…');
+      try {
+        const result = await api('/api/admin/cloudfront/scan', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+        cloudFrontWizard.review = result;
+        cloudFrontWizard.error = '';
+        if (result.distributionId) {
+          applyCloudFrontSelection(result.distributionId);
+          cloudFrontWizard.form.distributionDomainName = result.domainName || cloudFrontWizard.form.distributionDomainName;
+        }
+        writeCloudFrontOutput(result);
+        toast('Scan completed');
+        setCloudFrontStep('review');
+      } catch (error) {
+        setCloudFrontError(error.message);
+        writeCloudFrontOutput(`Error: ${error.message}`);
+        toast(error.message, 'error');
+      }
+    }
+
+    async function bindCloudFrontWizardDistribution() {
+      const selectedID = cloudFrontWizard.selectedDistributionId || cloudFrontWizard.form.distributionId.trim();
+      if (!selectedID) {
+        setCloudFrontError('Select a distribution first.');
+        return;
+      }
+      writeCloudFrontOutput('Binding distribution…');
       try {
         const result = await api('/api/admin/cloudfront/bind', {
           method: 'POST',
-          body: JSON.stringify(selectedID ? { distributionId: selectedID } : {}),
+          body: JSON.stringify({ distributionId: selectedID }),
         });
-        outputEl.textContent = JSON.stringify(result, null, 2);
-        toast(selectedID ? 'Bind completed' : 'Managed distribution created and bound');
+        cloudFrontWizard.bindResult = result;
+        cloudFrontWizard.error = '';
+        writeCloudFrontOutput(result);
+        toast('Bind completed');
         await loadCloudFrontConfig();
+        await prepareCloudFrontSyncStep();
       } catch (error) {
-        outputEl.textContent = `Error: ${error.message}`;
+        setCloudFrontError(error.message);
+        writeCloudFrontOutput(`Error: ${error.message}`);
         toast(error.message, 'error');
       }
     }
 
-    document.getElementById('cf-save-btn').addEventListener('click', saveCloudFrontConfig);
-    document.getElementById('cf-delete-btn').addEventListener('click', deleteCloudFrontConfig);
-    document.getElementById('cf-discover-btn').addEventListener('click', () => loadCloudFrontDistributions(document.getElementById('cf-distribution-id').value.trim()));
-    document.getElementById('cf-scan-btn').addEventListener('click', () => cloudFrontAction('scan', 'Scan'));
-    document.getElementById('cf-bind-btn').addEventListener('click', bindCloudFrontDistribution);
-    document.getElementById('cf-plan-btn').addEventListener('click', () => cloudFrontAction('plan', 'Plan'));
-    document.getElementById('cf-sync-btn').addEventListener('click', () => cloudFrontAction('sync', 'Sync'));
+    async function prepareCloudFrontSyncStep() {
+      cloudFrontWizard.plan = null;
+      cloudFrontWizard.sync = null;
+      renderCloudFrontWizard();
+      writeCloudFrontOutput('Checking CloudFront changes…');
+      try {
+        const result = await api('/api/admin/cloudfront/plan', { method: 'POST' });
+        cloudFrontWizard.plan = result;
+        cloudFrontWizard.error = '';
+        writeCloudFrontOutput(result);
+        setCloudFrontStep('sync');
+      } catch (error) {
+        setCloudFrontError(error.message);
+        writeCloudFrontOutput(`Error: ${error.message}`);
+        toast(error.message, 'error');
+      }
+    }
+
+    async function recheckCloudFrontChanges() {
+      return prepareCloudFrontSyncStep();
+    }
+
+    async function applyCloudFrontWizardSync() {
+      writeCloudFrontOutput('Applying CloudFront sync…');
+      try {
+        const result = await api('/api/admin/cloudfront/sync', { method: 'POST' });
+        cloudFrontWizard.sync = result;
+        cloudFrontWizard.error = '';
+        writeCloudFrontOutput(result);
+        toast('CloudFront sync completed');
+        await loadCloudFrontConfig();
+        renderCloudFrontWizard();
+      } catch (error) {
+        setCloudFrontError(error.message);
+        writeCloudFrontOutput(`Error: ${error.message}`);
+        toast(error.message, 'error');
+      }
+    }
+
+    function toggleCloudFrontTechnicalDetails() {
+      cloudFrontWizard.detailsOpen = !cloudFrontWizard.detailsOpen;
+      renderCloudFrontWizard();
+    }
+
     document.getElementById('cf-refresh-status-btn').addEventListener('click', loadCloudFrontConfig);
+    document.getElementById('cf-tech-toggle').addEventListener('click', toggleCloudFrontTechnicalDetails);
     document.getElementById('cf-enabled-toggle').addEventListener('change', async function() {
       try {
         await api('/api/admin/cloudfront/toggle', {
@@ -2124,6 +2668,51 @@
       } catch (error) {
         toast(error.message, 'error');
         this.checked = !this.checked;
+      }
+    });
+
+    document.addEventListener('click', async (event) => {
+      const rawTarget = event.target;
+      if (!(rawTarget instanceof HTMLElement)) return;
+      const stepTarget = rawTarget.closest('[data-cf-step]');
+      if (stepTarget instanceof HTMLElement && stepTarget.dataset.cfStep) {
+        return navigateCloudFrontStep(stepTarget.dataset.cfStep);
+      }
+      const target = rawTarget.closest('[id]');
+      if (!(target instanceof HTMLElement)) return;
+      if (target.id === 'cf-keep-current-btn') return keepCurrentCloudFrontSetup();
+      if (target.id === 'cf-change-setup-btn') return chooseChangeCloudFrontSetup();
+      if (target.id === 'cf-use-existing-credentials') {
+        cloudFrontWizard.credentialsMode = 'existing';
+        cloudFrontWizard.error = '';
+        return renderCloudFrontWizard();
+      }
+      if (target.id === 'cf-replace-credentials') {
+        cloudFrontWizard.credentialsMode = 'replace';
+        cloudFrontWizard.error = '';
+        return renderCloudFrontWizard();
+      }
+      if (target.id === 'cf-connect-continue-btn') return connectCloudFrontWizard();
+      if (target.id === 'cf-delete-btn') return deleteCloudFrontConfig();
+      if (target.id === 'cf-path-existing') return chooseCloudFrontPath('existing');
+      if (target.id === 'cf-path-managed') return chooseCloudFrontPath('managed');
+      if (target.id === 'cf-switch-to-managed-btn') return switchToManagedFallback();
+      if (target.id === 'cf-use-existing-btn') return useSelectedCloudFrontDistribution();
+      if (target.id === 'cf-create-managed-btn') return createManagedCloudFrontDistribution();
+      if (target.id === 'cf-back-to-path-btn') return setCloudFrontStep('path');
+      if (target.id === 'cf-back-to-target-btn') return setCloudFrontStep('target');
+      if (target.id === 'cf-bind-distribution-btn') return bindCloudFrontWizardDistribution();
+      if (target.id === 'cf-recheck-changes-btn') return recheckCloudFrontChanges();
+      if (target.id === 'cf-apply-sync-btn') return applyCloudFrontWizardSync();
+    });
+
+    document.addEventListener('change', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.id === 'cf-distribution-select') {
+        const select = target;
+        applyCloudFrontSelection(select.value.trim());
+        clearCloudFrontDownstream('review');
       }
     });
 

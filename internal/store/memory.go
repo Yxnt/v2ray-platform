@@ -1450,14 +1450,3 @@ func (s *MemoryStore) ListNodeConfigRevisions(nodeID string) ([]domain.ConfigRev
 func (s *MemoryStore) RollbackNodeConfig(_ string, _ int64) (*domain.ConfigRevision, error) {
 	return nil, ErrNotFound
 }
-
-func (s *MemoryStore) SetNodeProxy(nodeID, proxyNodeID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	node, ok := s.nodes[nodeID]
-	if !ok {
-		return ErrNotFound
-	}
-	node.ProxyNodeID = proxyNodeID
-	return nil
-}

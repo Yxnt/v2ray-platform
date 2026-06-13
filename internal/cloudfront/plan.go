@@ -8,9 +8,9 @@ import (
 
 // SyncPlan holds the actions needed to reconcile CloudFront path routing.
 type SyncPlan struct {
-	Actions       []RouteAction
-	RewriteRoutes []RewriteRoute
-	DriftStatus   string // "in_sync", "drifted", "conflict"
+	Actions       []RouteAction  `json:"actions"`
+	RewriteRoutes []RewriteRoute `json:"rewriteRoutes"`
+	DriftStatus   string         `json:"driftStatus"` // "in_sync", "drifted", "conflict"
 }
 
 type routeState struct {

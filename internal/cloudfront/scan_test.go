@@ -40,6 +40,9 @@ func TestScanDistributionSuccess(t *testing.T) {
 				{OriginID: "origin-1", DomainName: "node1.example.com"},
 			},
 			Behaviors: []BehaviorState{{PathPattern: "/key1234", OriginID: "origin-1"}},
+			Parameters: []ParameterDefinitionState{
+				{Name: "tenantHost", Required: true, DefaultValue: "edge.example.com", Comment: "Tenant hostname"},
+			},
 		},
 	}
 
@@ -65,6 +68,15 @@ func TestScanDistributionSuccess(t *testing.T) {
 	}
 	if result.Origins[0].RouteKey != "key1234" {
 		t.Fatalf("expected routeKey 'key1234', got '%s'", result.Origins[0].RouteKey)
+	}
+	if len(result.DistributionOrigins) != 1 || result.DistributionOrigins[0].OriginID != "origin-1" {
+		t.Fatalf("expected distribution origins metadata, got %+v", result.DistributionOrigins)
+	}
+	if len(result.CacheBehaviors) != 1 || result.CacheBehaviors[0].PathPattern != "/key1234" {
+		t.Fatalf("expected cache behaviors metadata, got %+v", result.CacheBehaviors)
+	}
+	if len(result.Parameters) != 1 || result.Parameters[0].Name != "tenantHost" {
+		t.Fatalf("expected parameter metadata, got %+v", result.Parameters)
 	}
 
 	// Verify origins were persisted
@@ -177,7 +189,7 @@ func TestScanDistributionIgnoresRootBehavior(t *testing.T) {
 			Origins: []OriginState{
 				{OriginID: "default-origin", DomainName: "default.example.com"},
 			},
-			Behaviors: []BehaviorState{{PathPattern: "/", OriginID: "default-origin"}},
+			Behaviors: []BehaviorState{{PathPattern: "/", OriginID: "default-origin", IsDefault: true}},
 		},
 	}
 
@@ -188,5 +200,8 @@ func TestScanDistributionIgnoresRootBehavior(t *testing.T) {
 	}
 	if len(result.Origins) != 0 {
 		t.Fatalf("expected root behavior to be ignored, got %+v", result.Origins)
+	}
+	if len(result.CacheBehaviors) != 1 || result.CacheBehaviors[0].PathPattern != "/" || !result.CacheBehaviors[0].IsDefault {
+		t.Fatalf("expected root behavior to remain visible in metadata, got %+v", result.CacheBehaviors)
 	}
 }

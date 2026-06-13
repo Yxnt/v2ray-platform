@@ -1922,35 +1922,6 @@ func (s *PostgresStore) RollbackNodeConfig(nodeID string, version int64) (*domai
 	}, nil
 }
 
-func (s *PostgresStore) SetNodeProxy(nodeID, proxyNodeID string) error {
-	if proxyNodeID == "" {
-		_, err := s.db.Exec(`UPDATE nodes SET proxy_node_id = NULL, updated_at = NOW() WHERE id = $1`, nodeID)
-		return mapPQError(err)
-	}
-	// Prevent self-loops.
-	if nodeID == proxyNodeID {
-		return fmt.Errorf("node cannot proxy through itself")
-	}
-	// Prevent indirect cycles by walking the existing proxy chain.
-	// Maximum chain length guard prevents infinite loops if data is inconsistent.
-	visited := map[string]struct{}{nodeID: {}}
-	current := proxyNodeID
-	for i := 0; i < 20; i++ {
-		if _, seen := visited[current]; seen {
-			return fmt.Errorf("proxy chain would create a cycle")
-		}
-		visited[current] = struct{}{}
-		var next *string
-		err := s.db.QueryRow(`SELECT proxy_node_id FROM nodes WHERE id = $1`, current).Scan(&next)
-		if err != nil || next == nil {
-			break
-		}
-		current = *next
-	}
-	_, err := s.db.Exec(`UPDATE nodes SET proxy_node_id = $2, updated_at = NOW() WHERE id = $1`, nodeID, proxyNodeID)
-	return mapPQError(err)
-}
-
 // ── CloudFront config ────────────────────────────────────────────────────────
 
 func (s *PostgresStore) GetCloudFrontConfig() (*domain.CloudFrontConfig, error) {

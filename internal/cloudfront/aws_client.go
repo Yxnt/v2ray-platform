@@ -1,6 +1,7 @@
 package cloudfront
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -25,6 +27,7 @@ type AWSClientConfig struct {
 	Endpoint        string
 	HTTPClient      *http.Client
 	Now             func() time.Time
+	Sleep           func(context.Context, time.Duration) error
 }
 
 type AWSClient struct {
@@ -35,6 +38,7 @@ type AWSClient struct {
 	endpoint        string
 	httpClient      *http.Client
 	now             func() time.Time
+	sleep           func(context.Context, time.Duration) error
 }
 
 // AWS managed cache policy "CachingDisabled"; websocket proxy traffic should
@@ -59,6 +63,10 @@ func NewAWSClient(cfg AWSClientConfig) (*AWSClient, error) {
 	if now == nil {
 		now = time.Now
 	}
+	sleep := cfg.Sleep
+	if sleep == nil {
+		sleep = sleepContext
+	}
 	return &AWSClient{
 		accessKeyID:     cfg.AccessKeyID,
 		secretAccessKey: cfg.SecretAccessKey,
@@ -70,11 +78,13 @@ func NewAWSClient(cfg AWSClientConfig) (*AWSClient, error) {
 		endpoint:   strings.TrimRight(endpoint, "/"),
 		httpClient: httpClient,
 		now:        now,
+		sleep:      sleep,
 	}, nil
 }
 
 func (c *AWSClient) ListDistributions(ctx context.Context) ([]DistributionSummary, error) {
 	out := make([]DistributionSummary, 0)
+	needsTenantLookup := false
 	marker := ""
 	for {
 		path := "/2020-05-31/distribution"
@@ -99,12 +109,17 @@ func (c *AWSClient) ListDistributions(ctx context.Context) ([]DistributionSummar
 		resp.Body.Close()
 
 		for _, item := range payload.Items.Items {
+			aliases := append([]string(nil), item.Aliases.Items...)
+			displayDomain := preferredDistributionDomain(item.DomainName, aliases)
+			if displayDomain == "" {
+				needsTenantLookup = true
+			}
 			out = append(out, DistributionSummary{
 				DistributionID: item.ID,
-				DomainName:     item.DomainName,
+				DomainName:     displayDomain,
 				Status:         item.Status,
 				Comment:        item.Comment,
-				Aliases:        item.Aliases.Items,
+				Aliases:        aliases,
 			})
 		}
 		if !payload.IsTruncated {
@@ -113,6 +128,18 @@ func (c *AWSClient) ListDistributions(ctx context.Context) ([]DistributionSummar
 		marker = strings.TrimSpace(payload.NextMarker)
 		if marker == "" {
 			return nil, fmt.Errorf("cloudfront: distribution list is truncated but NextMarker is missing")
+		}
+	}
+	if needsTenantLookup {
+		tenantDomainsByDistribution, err := c.listAllDistributionTenantDomains(ctx)
+		if err == nil {
+			for i := range out {
+				if out[i].DomainName != "" {
+					continue
+				}
+				out[i].Aliases = mergeDistributionDomains(out[i].Aliases, tenantDomainsByDistribution[out[i].DistributionID])
+				out[i].DomainName = preferredDistributionDomain("", out[i].Aliases)
+			}
 		}
 	}
 	return out, nil
@@ -133,7 +160,17 @@ func (c *AWSClient) GetDistribution(ctx context.Context, distributionID string) 
 		return nil, fmt.Errorf("cloudfront: decode distribution: %w", err)
 	}
 
-	return distributionStateFromResponse(payload), nil
+	dist := distributionStateFromResponse(payload)
+	if dist.DomainName == "" {
+		tenantDomainsByDistribution, err := c.listAllDistributionTenantDomains(ctx)
+		if err == nil {
+			dist.Aliases = mergeDistributionDomains(dist.Aliases, tenantDomainsByDistribution[distributionID])
+			dist.DomainName = preferredDistributionDomain("", dist.Aliases)
+		} else if isCloudFrontAccessDenied(err) {
+			return nil, fmt.Errorf("cloudfront: distribution tenant domains require cloudfront:ListDistributionTenants permission: %w", err)
+		}
+	}
+	return dist, nil
 }
 
 func (c *AWSClient) CreateDistribution(ctx context.Context, input CreateDistributionInput) (*DistributionState, error) {
@@ -169,14 +206,17 @@ func (c *AWSClient) CreateDistribution(ctx context.Context, input CreateDistribu
 }
 
 func distributionStateFromResponse(payload distributionResponse) *DistributionState {
+	aliases := aliasItems(payload.DistributionConfig.Aliases)
+	displayDomain := preferredDistributionDomain(payload.DomainName, aliases)
 	dist := &DistributionState{
 		DistributionID: payload.ID,
-		DomainName:     payload.DomainName,
+		DomainName:     displayDomain,
 		Status:         payload.Status,
 		Comment:        payload.DistributionConfig.Comment,
-		Aliases:        payload.DistributionConfig.Aliases.Items,
+		Aliases:        aliases,
 		Origins:        make([]OriginState, 0, len(payload.DistributionConfig.Origins.Items)),
 		Behaviors:      make([]BehaviorState, 0, len(payload.DistributionConfig.CacheBehaviors.Items)),
+		Parameters:     nil,
 	}
 	for _, origin := range payload.DistributionConfig.Origins.Items {
 		dist.Origins = append(dist.Origins, OriginState{
@@ -184,13 +224,137 @@ func distributionStateFromResponse(payload distributionResponse) *DistributionSt
 			DomainName: origin.DomainName,
 		})
 	}
+	if strings.TrimSpace(payload.DistributionConfig.DefaultCacheBehavior.TargetOriginID) != "" {
+		dist.Behaviors = append(dist.Behaviors, BehaviorState{
+			PathPattern: "/",
+			OriginID:    payload.DistributionConfig.DefaultCacheBehavior.TargetOriginID,
+			IsDefault:   true,
+		})
+	}
 	for _, behavior := range payload.DistributionConfig.CacheBehaviors.Items {
 		dist.Behaviors = append(dist.Behaviors, BehaviorState{
 			PathPattern: behavior.PathPattern,
 			OriginID:    behavior.TargetOriginID,
+			IsDefault:   false,
 		})
 	}
+	if payload.DistributionConfig.TenantConfig != nil {
+		dist.Parameters = make([]ParameterDefinitionState, 0, len(payload.DistributionConfig.TenantConfig.ParameterDefinitions.all()))
+		for _, parameter := range payload.DistributionConfig.TenantConfig.ParameterDefinitions.all() {
+			dist.Parameters = append(dist.Parameters, ParameterDefinitionState{
+				Name:         strings.TrimSpace(parameter.Name),
+				Required:     parameter.Definition.StringSchema.Required,
+				DefaultValue: strings.TrimSpace(parameter.Definition.StringSchema.DefaultValue),
+				Comment:      strings.TrimSpace(parameter.Definition.StringSchema.Comment),
+			})
+		}
+	}
 	return dist
+}
+
+func aliasItems(aliases *aliasesXML) []string {
+	if aliases == nil {
+		return nil
+	}
+	return aliases.Items
+}
+
+func preferredDistributionDomain(domainName string, aliases []string) string {
+	domainName = normalizeDistributionDomain(domainName)
+	if domainName != "" {
+		return domainName
+	}
+	for _, alias := range aliases {
+		alias = normalizeDistributionDomain(alias)
+		if alias != "" {
+			return alias
+		}
+	}
+	return ""
+}
+
+func normalizeDistributionDomain(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "-" {
+		return ""
+	}
+	return value
+}
+
+func isCloudFrontAccessDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "AccessDenied")
+}
+
+func isCloudFrontPreconditionFailed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "PreconditionFailed")
+}
+
+func mergeDistributionDomains(existing []string, extras []string) []string {
+	if len(existing) == 0 && len(extras) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(existing)+len(extras))
+	seen := make(map[string]struct{}, len(existing)+len(extras))
+	for _, value := range append(append([]string(nil), existing...), extras...) {
+		normalized := normalizeDistributionDomain(value)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func (c *AWSClient) listAllDistributionTenantDomains(ctx context.Context) (map[string][]string, error) {
+	marker := ""
+	out := make(map[string][]string)
+	for {
+		reqBody, err := xml.Marshal(listDistributionTenantsRequestXML{
+			XMLNS:  "http://cloudfront.amazonaws.com/doc/2020-05-31/",
+			Marker: marker,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cloudfront: encode distribution tenants request: %w", err)
+		}
+		resp, err := c.do(ctx, http.MethodPost, "/2020-05-31/distribution-tenants", reqBody, "application/xml")
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			err := readCloudFrontError(resp)
+			resp.Body.Close()
+			return nil, err
+		}
+		var payload listDistributionTenantsResponseXML
+		if err := xml.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("cloudfront: decode distribution tenants: %w", err)
+		}
+		resp.Body.Close()
+		for _, tenant := range payload.DistributionTenantList.Items {
+			domains := make([]string, 0, len(tenant.Domains.Items))
+			for _, domain := range tenant.Domains.Items {
+				domains = append(domains, domain.Domain)
+			}
+			out[tenant.DistributionID] = mergeDistributionDomains(out[tenant.DistributionID], domains)
+		}
+		next := strings.TrimSpace(payload.NextMarker)
+		if next == "" {
+			break
+		}
+		marker = next
+	}
+	return out, nil
 }
 
 func (c *AWSClient) ApplyDistributionRoutes(ctx context.Context, distributionID string, actions []RouteAction, rewrites []RewriteRoute) error {
@@ -205,65 +369,124 @@ func (c *AWSClient) ApplyDistributionRoutes(ctx context.Context, distributionID 
 		return nil
 	}
 
-	cfg, etag, err := c.getDistributionConfig(ctx, distributionID)
-	if err != nil {
-		return err
-	}
-
-	behaviorTemplate := cfg.defaultBehaviorTemplate()
-	for _, action := range actionable {
-		switch action.Action {
-		case "add_route", "replace_route":
-			if !isManagedOriginID(action.OriginID) {
-				return fmt.Errorf("cloudfront: refusing to manage route %q with unmanaged origin %q", routePattern(action.RouteKey), action.OriginID)
-			}
-			if existing, ok := cfg.behaviorForRouteKey(action.RouteKey); ok && existing.TargetOriginID != action.OriginID && !isManagedOriginID(existing.TargetOriginID) {
-				return fmt.Errorf("cloudfront: route %q is occupied by unmanaged origin %q", routePattern(action.RouteKey), existing.TargetOriginID)
-			}
-			cfg.upsertOrigin(action.OriginID, action.Host)
-			cfg.upsertBehavior(action.RouteKey, action.OriginID, behaviorTemplate)
-		case "remove_route":
-			if existing, ok := cfg.behaviorForRouteKey(action.RouteKey); ok && !isManagedOriginID(existing.TargetOriginID) {
-				return fmt.Errorf("cloudfront: refusing to remove unmanaged route %q with origin %q", routePattern(action.RouteKey), existing.TargetOriginID)
-			}
-			cfg.removeBehavior(action.RouteKey)
-			if strings.TrimSpace(action.OriginID) != "" && !isManagedOriginID(action.OriginID) {
-				return fmt.Errorf("cloudfront: refusing to remove unmanaged origin %q", action.OriginID)
-			}
-			if strings.TrimSpace(action.OriginID) != "" && !cfg.behaviorReferencesOrigin(action.OriginID) {
-				cfg.removeOrigin(action.OriginID)
-			}
-		default:
-			return fmt.Errorf("cloudfront: unsupported route action %q", action.Action)
-		}
-	}
-
-	if len(rewrites) > 0 {
-		functionARN, err := c.ensureRouteRewriteFunction(ctx, rewrites)
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		cfg, etag, err := c.getDistributionConfig(ctx, distributionID)
 		if err != nil {
 			return err
 		}
-		cfg.attachRouteRewriteFunction(rewrites, functionARN)
-	}
+		currentBody, err := canonicalDistributionConfigXML(cfg)
+		if err != nil {
+			return err
+		}
+		log.Printf("cloudfront distribution update attempt=%d distribution_id=%s etag=%q actionable_routes=%d rewrites=%d", attempt+1, distributionID, etag, len(actionable), len(rewrites))
 
-	cfg.normalize()
-	cfg.XMLNS = "http://cloudfront.amazonaws.com/doc/2020-05-31/"
+		behaviorTemplate := cfg.defaultBehaviorTemplate()
+		for _, action := range actionable {
+			switch action.Action {
+			case "add_route", "replace_route":
+				if !isManagedOriginID(action.OriginID) {
+					return fmt.Errorf("cloudfront: refusing to manage route %q with unmanaged origin %q", routePattern(action.RouteKey), action.OriginID)
+				}
+				if existing, ok := cfg.behaviorForRouteKey(action.RouteKey); ok && existing.TargetOriginID != action.OriginID && !isManagedOriginID(existing.TargetOriginID) {
+					return fmt.Errorf("cloudfront: route %q is occupied by unmanaged origin %q", routePattern(action.RouteKey), existing.TargetOriginID)
+				}
+				cfg.upsertOrigin(action.OriginID, action.Host)
+				cfg.upsertBehavior(action.RouteKey, action.OriginID, behaviorTemplate)
+			case "remove_route":
+				if existing, ok := cfg.behaviorForRouteKey(action.RouteKey); ok && !isManagedOriginID(existing.TargetOriginID) {
+					return fmt.Errorf("cloudfront: refusing to remove unmanaged route %q with origin %q", routePattern(action.RouteKey), existing.TargetOriginID)
+				}
+				cfg.removeBehavior(action.RouteKey)
+				if strings.TrimSpace(action.OriginID) != "" && !isManagedOriginID(action.OriginID) {
+					return fmt.Errorf("cloudfront: refusing to remove unmanaged origin %q", action.OriginID)
+				}
+				if strings.TrimSpace(action.OriginID) != "" && !cfg.behaviorReferencesOrigin(action.OriginID) {
+					cfg.removeOrigin(action.OriginID)
+				}
+			default:
+				return fmt.Errorf("cloudfront: unsupported route action %q", action.Action)
+			}
+		}
+
+		if len(rewrites) > 0 {
+			functionARN, err := c.ensureRouteRewriteFunction(ctx, rewrites)
+			if err != nil {
+				return err
+			}
+			cfg.attachRouteRewriteFunction(rewrites, functionARN)
+		}
+
+		cfg.normalize()
+		cfg.XMLNS = "http://cloudfront.amazonaws.com/doc/2020-05-31/"
+		body, err := xml.Marshal(cfg)
+		if err != nil {
+			return fmt.Errorf("cloudfront: encode distribution config: %w", err)
+		}
+		if bytes.Equal(currentBody, body) {
+			log.Printf("cloudfront distribution update skipped attempt=%d distribution_id=%s reason=no_config_change", attempt+1, distributionID)
+			return nil
+		}
+
+		resp, err := c.doWithHeaders(ctx, http.MethodPut, "/2020-05-31/distribution/"+url.PathEscape(distributionID)+"/config", body, "application/xml", map[string]string{
+			"If-Match": etag,
+		})
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode == http.StatusOK {
+			resp.Body.Close()
+			return nil
+		}
+
+		lastErr = readCloudFrontError(resp)
+		resp.Body.Close()
+		log.Printf("cloudfront distribution update failed attempt=%d distribution_id=%s etag=%q error=%v", attempt+1, distributionID, etag, lastErr)
+		if !isCloudFrontPreconditionFailed(lastErr) || attempt == 4 {
+			return lastErr
+		}
+		if err := c.sleep(ctx, time.Duration(attempt+1)*200*time.Millisecond); err != nil {
+			return err
+		}
+	}
+	return lastErr
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func canonicalDistributionConfigXML(cfg *distributionConfigXML) ([]byte, error) {
+	clone, err := cloneDistributionConfigXML(cfg)
+	if err != nil {
+		return nil, err
+	}
+	clone.normalize()
+	clone.XMLNS = "http://cloudfront.amazonaws.com/doc/2020-05-31/"
+	body, err := xml.Marshal(clone)
+	if err != nil {
+		return nil, fmt.Errorf("cloudfront: encode canonical distribution config: %w", err)
+	}
+	return body, nil
+}
+
+func cloneDistributionConfigXML(cfg *distributionConfigXML) (*distributionConfigXML, error) {
 	body, err := xml.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("cloudfront: encode distribution config: %w", err)
+		return nil, fmt.Errorf("cloudfront: clone distribution config marshal: %w", err)
 	}
-
-	resp, err := c.doWithHeaders(ctx, http.MethodPut, "/2020-05-31/distribution/"+url.PathEscape(distributionID)+"/config", body, "application/xml", map[string]string{
-		"If-Match": etag,
-	})
-	if err != nil {
-		return err
+	var cloned distributionConfigXML
+	if err := xml.Unmarshal(body, &cloned); err != nil {
+		return nil, fmt.Errorf("cloudfront: clone distribution config unmarshal: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return readCloudFrontError(resp)
-	}
-	return nil
+	return &cloned, nil
 }
 
 func (c *AWSClient) do(ctx context.Context, method, path string, body []byte, contentType string) (*http.Response, error) {
@@ -355,6 +578,16 @@ func (c *AWSClient) ensureRouteRewriteFunction(ctx context.Context, rewrites []R
 				return "", err
 			}
 		}
+	}
+	if strings.TrimSpace(etag) == "" {
+		_, latestETag, exists, err := c.describeFunction(ctx)
+		if err != nil {
+			return "", err
+		}
+		if !exists || strings.TrimSpace(latestETag) == "" {
+			return "", fmt.Errorf("cloudfront: route rewrite function etag missing after update")
+		}
+		etag = latestETag
 	}
 
 	published, _, err := c.publishFunction(ctx, etag)
@@ -602,7 +835,25 @@ func readCloudFrontError(resp *http.Response) error {
 	if msg == "" {
 		msg = resp.Status
 	}
-	return fmt.Errorf("cloudfront: %s", msg)
+	if requestID := extractCloudFrontRequestID(msg); requestID != "" {
+		return fmt.Errorf("cloudfront: status=%d request_id=%s body=%s", resp.StatusCode, requestID, msg)
+	}
+	return fmt.Errorf("cloudfront: status=%d body=%s", resp.StatusCode, msg)
+}
+
+func extractCloudFrontRequestID(body string) string {
+	const startTag = "<RequestId>"
+	const endTag = "</RequestId>"
+	start := strings.Index(body, startTag)
+	if start < 0 {
+		return ""
+	}
+	start += len(startTag)
+	end := strings.Index(body[start:], endTag)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(body[start : start+end])
 }
 
 type distributionListResponse struct {
@@ -630,6 +881,40 @@ type distributionResponse struct {
 	Status             string                `xml:"Status"`
 	DomainName         string                `xml:"DomainName"`
 	DistributionConfig distributionConfigXML `xml:"DistributionConfig"`
+}
+
+type listDistributionTenantsRequestXML struct {
+	XMLName           xml.Name                                `xml:"ListDistributionTenantsRequest"`
+	XMLNS             string                                  `xml:"xmlns,attr,omitempty"`
+	AssociationFilter *distributionTenantAssociationFilterXML `xml:"AssociationFilter,omitempty"`
+	Marker            string                                  `xml:"Marker,omitempty"`
+}
+
+type distributionTenantAssociationFilterXML struct {
+	DistributionID string `xml:"DistributionId,omitempty"`
+}
+
+type listDistributionTenantsResponseXML struct {
+	XMLName                xml.Name                  `xml:"ListDistributionTenantsResult"`
+	NextMarker             string                    `xml:"NextMarker"`
+	DistributionTenantList distributionTenantListXML `xml:"DistributionTenantList"`
+}
+
+type distributionTenantListXML struct {
+	Items []distributionTenantSummaryXML `xml:"DistributionTenantSummary"`
+}
+
+type distributionTenantSummaryXML struct {
+	DistributionID string                       `xml:"DistributionId"`
+	Domains        distributionTenantDomainsXML `xml:"Domains"`
+}
+
+type distributionTenantDomainsXML struct {
+	Items []distributionTenantDomainResultXML `xml:"member"`
+}
+
+type distributionTenantDomainResultXML struct {
+	Domain string `xml:"Domain"`
 }
 
 type createFunctionRequestXML struct {
@@ -666,28 +951,33 @@ type functionMetadataXML struct {
 }
 
 type distributionConfigXML struct {
-	XMLName                      xml.Name                `xml:"DistributionConfig"`
-	XMLNS                        string                  `xml:"xmlns,attr,omitempty"`
-	CallerReference              string                  `xml:"CallerReference,omitempty"`
-	Aliases                      aliasesXML              `xml:"Aliases"`
-	DefaultRootObject            string                  `xml:"DefaultRootObject,omitempty"`
-	Origins                      originsXML              `xml:"Origins"`
-	OriginGroups                 passthroughXML          `xml:"OriginGroups,omitempty"`
-	DefaultCacheBehavior         defaultCacheBehaviorXML `xml:"DefaultCacheBehavior"`
-	CacheBehaviors               cacheBehaviorsXML       `xml:"CacheBehaviors"`
-	CustomErrorResponses         passthroughXML          `xml:"CustomErrorResponses,omitempty"`
-	Comment                      string                  `xml:"Comment,omitempty"`
-	Logging                      passthroughXML          `xml:"Logging,omitempty"`
-	PriceClass                   string                  `xml:"PriceClass,omitempty"`
-	Enabled                      bool                    `xml:"Enabled"`
-	ViewerCertificate            passthroughXML          `xml:"ViewerCertificate,omitempty"`
-	Restrictions                 passthroughXML          `xml:"Restrictions,omitempty"`
-	WebACLID                     string                  `xml:"WebACLId,omitempty"`
-	HttpVersion                  string                  `xml:"HttpVersion,omitempty"`
-	IsIPV6Enabled                bool                    `xml:"IsIPV6Enabled,omitempty"`
-	ContinuousDeploymentPolicyID string                  `xml:"ContinuousDeploymentPolicyId,omitempty"`
-	Staging                      bool                    `xml:"Staging,omitempty"`
-	AnycastIPListID              string                  `xml:"AnycastIpListId,omitempty"`
+	XMLName                       xml.Name                `xml:"DistributionConfig"`
+	XMLNS                         string                  `xml:"xmlns,attr,omitempty"`
+	CallerReference               string                  `xml:"CallerReference,omitempty"`
+	Aliases                       *aliasesXML             `xml:"Aliases,omitempty"`
+	DefaultRootObject             string                  `xml:"DefaultRootObject"`
+	Origins                       originsXML              `xml:"Origins"`
+	OriginGroups                  passthroughXML          `xml:"OriginGroups,omitempty"`
+	DefaultCacheBehavior          defaultCacheBehaviorXML `xml:"DefaultCacheBehavior"`
+	CacheBehaviors                cacheBehaviorsXML       `xml:"CacheBehaviors"`
+	CacheTagConfig                passthroughXML          `xml:"CacheTagConfig,omitempty"`
+	ConnectionFunctionAssociation passthroughXML          `xml:"ConnectionFunctionAssociation,omitempty"`
+	ConnectionMode                string                  `xml:"ConnectionMode,omitempty"`
+	CustomErrorResponses          passthroughXML          `xml:"CustomErrorResponses,omitempty"`
+	Comment                       string                  `xml:"Comment"`
+	Logging                       passthroughXML          `xml:"Logging,omitempty"`
+	PriceClass                    string                  `xml:"PriceClass,omitempty"`
+	Enabled                       bool                    `xml:"Enabled"`
+	ViewerCertificate             passthroughXML          `xml:"ViewerCertificate,omitempty"`
+	Restrictions                  passthroughXML          `xml:"Restrictions,omitempty"`
+	WebACLID                      string                  `xml:"WebACLId"`
+	HttpVersion                   string                  `xml:"HttpVersion"`
+	IsIPV6Enabled                 bool                    `xml:"IsIPV6Enabled,omitempty"`
+	ContinuousDeploymentPolicyID  string                  `xml:"ContinuousDeploymentPolicyId,omitempty"`
+	Staging                       bool                    `xml:"Staging,omitempty"`
+	AnycastIPListID               string                  `xml:"AnycastIpListId,omitempty"`
+	TenantConfig                  *tenantConfigXML        `xml:"TenantConfig,omitempty"`
+	ViewerMTlsConfig              passthroughXML          `xml:"ViewerMtlsConfig,omitempty"`
 }
 
 type aliasesXML struct {
@@ -703,14 +993,14 @@ type originsXML struct {
 type originXML struct {
 	ID                    string                `xml:"Id"`
 	DomainName            string                `xml:"DomainName"`
-	OriginPath            string                `xml:"OriginPath,omitempty"`
+	OriginPath            string                `xml:"OriginPath"`
 	CustomHeaders         passthroughXML        `xml:"CustomHeaders,omitempty"`
 	S3OriginConfig        passthroughXML        `xml:"S3OriginConfig,omitempty"`
 	CustomOriginConfig    customOriginConfigXML `xml:"CustomOriginConfig,omitempty"`
-	ConnectionAttempts    int                   `xml:"ConnectionAttempts,omitempty"`
-	ConnectionTimeout     int                   `xml:"ConnectionTimeout,omitempty"`
+	ConnectionAttempts    int                   `xml:"ConnectionAttempts"`
+	ConnectionTimeout     int                   `xml:"ConnectionTimeout"`
 	OriginShield          passthroughXML        `xml:"OriginShield,omitempty"`
-	OriginAccessControlID string                `xml:"OriginAccessControlId,omitempty"`
+	OriginAccessControlID string                `xml:"OriginAccessControlId"`
 }
 
 type cacheBehaviorsXML struct {
@@ -729,7 +1019,7 @@ type cacheBehaviorXML struct {
 	Compress                   *bool                   `xml:"Compress,omitempty"`
 	LambdaFunctionAssociations passthroughXML          `xml:"LambdaFunctionAssociations,omitempty"`
 	FunctionAssociations       functionAssociationsXML `xml:"FunctionAssociations,omitempty"`
-	FieldLevelEncryptionID     string                  `xml:"FieldLevelEncryptionId,omitempty"`
+	FieldLevelEncryptionID     string                  `xml:"FieldLevelEncryptionId"`
 	RealtimeLogConfigArn       string                  `xml:"RealtimeLogConfigArn,omitempty"`
 	CachePolicyID              string                  `xml:"CachePolicyId,omitempty"`
 	ForwardedValues            passthroughXML          `xml:"ForwardedValues,omitempty"`
@@ -748,7 +1038,7 @@ type defaultCacheBehaviorXML struct {
 	Compress                   *bool                   `xml:"Compress,omitempty"`
 	LambdaFunctionAssociations passthroughXML          `xml:"LambdaFunctionAssociations,omitempty"`
 	FunctionAssociations       functionAssociationsXML `xml:"FunctionAssociations,omitempty"`
-	FieldLevelEncryptionID     string                  `xml:"FieldLevelEncryptionId,omitempty"`
+	FieldLevelEncryptionID     string                  `xml:"FieldLevelEncryptionId"`
 	RealtimeLogConfigArn       string                  `xml:"RealtimeLogConfigArn,omitempty"`
 	CachePolicyID              string                  `xml:"CachePolicyId,omitempty"`
 	ForwardedValues            passthroughXML          `xml:"ForwardedValues,omitempty"`
@@ -758,12 +1048,12 @@ type defaultCacheBehaviorXML struct {
 }
 
 type customOriginConfigXML struct {
-	HTTPPort               int            `xml:"HTTPPort,omitempty"`
-	HTTPSPort              int            `xml:"HTTPSPort,omitempty"`
-	OriginProtocolPolicy   string         `xml:"OriginProtocolPolicy,omitempty"`
+	HTTPPort               int            `xml:"HTTPPort"`
+	HTTPSPort              int            `xml:"HTTPSPort"`
+	OriginProtocolPolicy   string         `xml:"OriginProtocolPolicy"`
 	OriginSslProtocols     passthroughXML `xml:"OriginSslProtocols,omitempty"`
-	OriginReadTimeout      int            `xml:"OriginReadTimeout,omitempty"`
-	OriginKeepaliveTimeout int            `xml:"OriginKeepaliveTimeout,omitempty"`
+	OriginReadTimeout      int            `xml:"OriginReadTimeout"`
+	OriginKeepaliveTimeout int            `xml:"OriginKeepaliveTimeout"`
 }
 
 type functionAssociationsXML struct {
@@ -776,8 +1066,100 @@ type functionAssociationXML struct {
 	FunctionARN string `xml:"FunctionARN"`
 }
 
-type passthroughXML struct {
-	Inner string `xml:",innerxml"`
+type tenantConfigXML struct {
+	ParameterDefinitions parameterDefinitionsXML `xml:"ParameterDefinitions"`
+}
+
+type parameterDefinitionsXML struct {
+	Direct []parameterDefinitionXML `xml:"ParameterDefinition"`
+	Member []parameterDefinitionXML `xml:"member"`
+}
+
+func (p parameterDefinitionsXML) all() []parameterDefinitionXML {
+	if len(p.Direct) == 0 {
+		return p.Member
+	}
+	if len(p.Member) == 0 {
+		return p.Direct
+	}
+	out := make([]parameterDefinitionXML, 0, len(p.Direct)+len(p.Member))
+	out = append(out, p.Direct...)
+	out = append(out, p.Member...)
+	return out
+}
+
+type parameterDefinitionXML struct {
+	Name       string                       `xml:"Name"`
+	Definition parameterDefinitionSchemaXML `xml:"Definition"`
+}
+
+type parameterDefinitionSchemaXML struct {
+	StringSchema stringSchemaConfigXML `xml:"StringSchema"`
+}
+
+type stringSchemaConfigXML struct {
+	Required     bool   `xml:"Required"`
+	Comment      string `xml:"Comment"`
+	DefaultValue string `xml:"DefaultValue"`
+}
+
+type passthroughXML string
+
+func (p passthroughXML) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	if p == "" {
+		return nil
+	}
+	if err := e.EncodeToken(start); err != nil {
+		return err
+	}
+	decoder := xml.NewDecoder(bytes.NewBufferString("<wrapper>" + string(p) + "</wrapper>"))
+	depth := 0
+	for {
+		tok, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		switch typed := tok.(type) {
+		case xml.StartElement:
+			if depth > 0 {
+				if err := e.EncodeToken(typed); err != nil {
+					return err
+				}
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+			if depth > 0 {
+				if err := e.EncodeToken(typed); err != nil {
+					return err
+				}
+			}
+		default:
+			if depth > 0 {
+				if err := e.EncodeToken(tok); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if err := e.EncodeToken(start.End()); err != nil {
+		return err
+	}
+	return e.Flush()
+}
+
+func (p *passthroughXML) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	var raw struct {
+		Inner string `xml:",innerxml"`
+	}
+	if err := d.DecodeElement(&raw, &start); err != nil {
+		return err
+	}
+	*p = passthroughXML(raw.Inner)
+	return nil
 }
 
 func (cfg *distributionConfigXML) defaultBehaviorTemplate() cacheBehaviorXML {
@@ -857,13 +1239,13 @@ func (cfg *distributionConfigXML) copyBehaviorDefaults(dst *cacheBehaviorXML, te
 	if dst.ViewerProtocolPolicy == "" {
 		dst.ViewerProtocolPolicy = template.ViewerProtocolPolicy
 	}
-	if dst.AllowedMethods.Inner == "" {
+	if dst.AllowedMethods == "" {
 		dst.AllowedMethods = template.AllowedMethods
 	}
-	if dst.TrustedSigners.Inner == "" {
+	if dst.TrustedSigners == "" {
 		dst.TrustedSigners = template.TrustedSigners
 	}
-	if dst.TrustedKeyGroups.Inner == "" {
+	if dst.TrustedKeyGroups == "" {
 		dst.TrustedKeyGroups = template.TrustedKeyGroups
 	}
 	if dst.SmoothStreaming == nil {
@@ -872,7 +1254,7 @@ func (cfg *distributionConfigXML) copyBehaviorDefaults(dst *cacheBehaviorXML, te
 	if dst.Compress == nil {
 		dst.Compress = template.Compress
 	}
-	if dst.LambdaFunctionAssociations.Inner == "" {
+	if dst.LambdaFunctionAssociations == "" {
 		dst.LambdaFunctionAssociations = template.LambdaFunctionAssociations
 	}
 	if dst.FunctionAssociations.Quantity == 0 && len(dst.FunctionAssociations.Items) == 0 {
@@ -887,10 +1269,10 @@ func (cfg *distributionConfigXML) copyBehaviorDefaults(dst *cacheBehaviorXML, te
 	if dst.CachePolicyID == "" {
 		dst.CachePolicyID = template.CachePolicyID
 	}
-	if dst.ForwardedValues.Inner == "" {
+	if dst.ForwardedValues == "" {
 		dst.ForwardedValues = template.ForwardedValues
 	}
-	if dst.CachePolicyID == "" && dst.ForwardedValues.Inner == "" {
+	if dst.CachePolicyID == "" && dst.ForwardedValues == "" {
 		dst.CachePolicyID = managedCachingDisabledPolicyID
 	}
 	if dst.OriginRequestPolicyID == "" {
@@ -899,7 +1281,7 @@ func (cfg *distributionConfigXML) copyBehaviorDefaults(dst *cacheBehaviorXML, te
 	if dst.ResponseHeadersPolicyID == "" {
 		dst.ResponseHeadersPolicyID = template.ResponseHeadersPolicyID
 	}
-	if dst.GrpcConfig.Inner == "" {
+	if dst.GrpcConfig == "" {
 		dst.GrpcConfig = template.GrpcConfig
 	}
 }
@@ -963,13 +1345,102 @@ func (cfg *distributionConfigXML) behaviorReferencesOrigin(originID string) bool
 }
 
 func (cfg *distributionConfigXML) normalize() {
+	if cfg.TenantConfig != nil && len(cfg.TenantConfig.ParameterDefinitions.all()) == 0 {
+		cfg.TenantConfig = nil
+	}
+	tenantOnly := strings.EqualFold(strings.TrimSpace(cfg.ConnectionMode), "tenant-only")
+	if tenantOnly {
+		cfg.Aliases = nil
+		cfg.PriceClass = ""
+		cfg.ContinuousDeploymentPolicyID = ""
+		cfg.AnycastIPListID = ""
+		cfg.IsIPV6Enabled = false
+	} else if strings.TrimSpace(cfg.PriceClass) == "" {
+		cfg.PriceClass = "PriceClass_All"
+	}
+	if !tenantOnly && cfg.Aliases == nil {
+		cfg.Aliases = &aliasesXML{}
+	}
+	for i := range cfg.Origins.Items {
+		if cfg.Origins.Items[i].CustomHeaders == "" {
+			cfg.Origins.Items[i].CustomHeaders = passthroughXML(`<Quantity>0</Quantity>`)
+		}
+		if cfg.Origins.Items[i].OriginShield == "" {
+			cfg.Origins.Items[i].OriginShield = passthroughXML(`<Enabled>false</Enabled>`)
+		}
+		if cfg.Origins.Items[i].ConnectionAttempts == 0 {
+			cfg.Origins.Items[i].ConnectionAttempts = 3
+		}
+		if cfg.Origins.Items[i].ConnectionTimeout == 0 {
+			cfg.Origins.Items[i].ConnectionTimeout = 10
+		}
+		if cfg.Origins.Items[i].CustomOriginConfig.HTTPPort == 0 {
+			cfg.Origins.Items[i].CustomOriginConfig.HTTPPort = 80
+		}
+		if cfg.Origins.Items[i].CustomOriginConfig.HTTPSPort == 0 {
+			cfg.Origins.Items[i].CustomOriginConfig.HTTPSPort = 443
+		}
+		if cfg.Origins.Items[i].CustomOriginConfig.OriginReadTimeout == 0 {
+			cfg.Origins.Items[i].CustomOriginConfig.OriginReadTimeout = 30
+		}
+		if cfg.Origins.Items[i].CustomOriginConfig.OriginKeepaliveTimeout == 0 {
+			cfg.Origins.Items[i].CustomOriginConfig.OriginKeepaliveTimeout = 5
+		}
+	}
+	defaultFalse := false
+	if tenantOnly {
+		cfg.DefaultCacheBehavior.SmoothStreaming = nil
+		cfg.DefaultCacheBehavior.TrustedSigners = ""
+	} else if cfg.DefaultCacheBehavior.SmoothStreaming == nil {
+		cfg.DefaultCacheBehavior.SmoothStreaming = &defaultFalse
+	}
+	if cfg.DefaultCacheBehavior.Compress == nil {
+		cfg.DefaultCacheBehavior.Compress = &defaultFalse
+	}
+	if !tenantOnly && cfg.DefaultCacheBehavior.TrustedSigners == "" {
+		cfg.DefaultCacheBehavior.TrustedSigners = passthroughXML(`<Enabled>false</Enabled><Quantity>0</Quantity>`)
+	}
+	if cfg.DefaultCacheBehavior.TrustedKeyGroups == "" {
+		cfg.DefaultCacheBehavior.TrustedKeyGroups = passthroughXML(`<Enabled>false</Enabled><Quantity>0</Quantity>`)
+	}
+	if cfg.DefaultCacheBehavior.LambdaFunctionAssociations == "" {
+		cfg.DefaultCacheBehavior.LambdaFunctionAssociations = passthroughXML(`<Quantity>0</Quantity>`)
+	}
+	if cfg.DefaultCacheBehavior.GrpcConfig == "" {
+		cfg.DefaultCacheBehavior.GrpcConfig = passthroughXML(`<Enabled>false</Enabled>`)
+	}
+	for i := range cfg.CacheBehaviors.Items {
+		if tenantOnly {
+			cfg.CacheBehaviors.Items[i].SmoothStreaming = nil
+			cfg.CacheBehaviors.Items[i].TrustedSigners = ""
+		} else if cfg.CacheBehaviors.Items[i].SmoothStreaming == nil {
+			cfg.CacheBehaviors.Items[i].SmoothStreaming = &defaultFalse
+		}
+		if cfg.CacheBehaviors.Items[i].Compress == nil {
+			cfg.CacheBehaviors.Items[i].Compress = &defaultFalse
+		}
+		if !tenantOnly && cfg.CacheBehaviors.Items[i].TrustedSigners == "" {
+			cfg.CacheBehaviors.Items[i].TrustedSigners = passthroughXML(`<Enabled>false</Enabled><Quantity>0</Quantity>`)
+		}
+		if cfg.CacheBehaviors.Items[i].TrustedKeyGroups == "" {
+			cfg.CacheBehaviors.Items[i].TrustedKeyGroups = passthroughXML(`<Enabled>false</Enabled><Quantity>0</Quantity>`)
+		}
+		if cfg.CacheBehaviors.Items[i].LambdaFunctionAssociations == "" {
+			cfg.CacheBehaviors.Items[i].LambdaFunctionAssociations = passthroughXML(`<Quantity>0</Quantity>`)
+		}
+		if cfg.CacheBehaviors.Items[i].GrpcConfig == "" {
+			cfg.CacheBehaviors.Items[i].GrpcConfig = passthroughXML(`<Enabled>false</Enabled>`)
+		}
+	}
 	sort.Slice(cfg.Origins.Items, func(i, j int) bool {
 		return cfg.Origins.Items[i].ID < cfg.Origins.Items[j].ID
 	})
 	sort.Slice(cfg.CacheBehaviors.Items, func(i, j int) bool {
 		return cfg.CacheBehaviors.Items[i].PathPattern < cfg.CacheBehaviors.Items[j].PathPattern
 	})
-	cfg.Aliases.Quantity = len(cfg.Aliases.Items)
+	if cfg.Aliases != nil {
+		cfg.Aliases.Quantity = len(cfg.Aliases.Items)
+	}
 	cfg.Origins.Quantity = len(cfg.Origins.Items)
 	cfg.CacheBehaviors.Quantity = len(cfg.CacheBehaviors.Items)
 	for i := range cfg.CacheBehaviors.Items {
@@ -980,12 +1451,12 @@ func (cfg *distributionConfigXML) normalize() {
 
 func defaultCustomOriginConfig() customOriginConfigXML {
 	return customOriginConfigXML{
-		HTTPPort:             80,
-		HTTPSPort:            443,
-		OriginProtocolPolicy: "https-only",
-		OriginSslProtocols: passthroughXML{
-			Inner: `<Quantity>1</Quantity><Items><SslProtocol>TLSv1.2</SslProtocol></Items>`,
-		},
+		HTTPPort:               80,
+		HTTPSPort:              443,
+		OriginProtocolPolicy:   "https-only",
+		OriginSslProtocols:     passthroughXML(`<Quantity>1</Quantity><Items><SslProtocol>TLSv1.2</SslProtocol></Items>`),
+		OriginReadTimeout:      30,
+		OriginKeepaliveTimeout: 5,
 	}
 }
 
@@ -1005,7 +1476,7 @@ func newManagedDistributionConfig(input CreateDistributionInput) *distributionCo
 		return &distributionConfigXML{}
 	}
 
-	allowedMethods := passthroughXML{Inner: `<Quantity>2</Quantity><Items><Method>GET</Method><Method>HEAD</Method></Items><CachedMethods><Quantity>2</Quantity><Items><Method>GET</Method><Method>HEAD</Method></Items></CachedMethods>`}
+	allowedMethods := passthroughXML(`<Quantity>2</Quantity><Items><Method>GET</Method><Method>HEAD</Method></Items><CachedMethods><Quantity>2</Quantity><Items><Method>GET</Method><Method>HEAD</Method></Items></CachedMethods>`)
 	compress := true
 	comment := strings.TrimSpace(input.Comment)
 	if comment == "" {
@@ -1015,7 +1486,7 @@ func newManagedDistributionConfig(input CreateDistributionInput) *distributionCo
 	cfg := &distributionConfigXML{
 		XMLNS:           "http://cloudfront.amazonaws.com/doc/2020-05-31/",
 		CallerReference: fmt.Sprintf("v2ray-platform-%d", time.Now().UnixNano()),
-		Aliases:         aliasesXML{Quantity: 0},
+		Aliases:         &aliasesXML{Quantity: 0},
 		Origins:         originsXML{Items: make([]originXML, 0, len(filteredNodes))},
 		DefaultCacheBehavior: defaultCacheBehaviorXML{
 			TargetOriginID:       managedOriginID(filteredNodes[0].NodeID),
@@ -1024,16 +1495,14 @@ func newManagedDistributionConfig(input CreateDistributionInput) *distributionCo
 			Compress:             &compress,
 			CachePolicyID:        managedCachingDisabledPolicyID,
 		},
-		CacheBehaviors: cacheBehaviorsXML{Items: make([]cacheBehaviorXML, 0, len(filteredNodes))},
-		Comment:        comment,
-		PriceClass:     "PriceClass_All",
-		Enabled:        true,
-		ViewerCertificate: passthroughXML{
-			Inner: `<CloudFrontDefaultCertificate>true</CloudFrontDefaultCertificate>`,
-		},
-		Restrictions:  passthroughXML{Inner: `<GeoRestriction><RestrictionType>none</RestrictionType><Quantity>0</Quantity></GeoRestriction>`},
-		HttpVersion:   "http2",
-		IsIPV6Enabled: true,
+		CacheBehaviors:    cacheBehaviorsXML{Items: make([]cacheBehaviorXML, 0, len(filteredNodes))},
+		Comment:           comment,
+		PriceClass:        "PriceClass_All",
+		Enabled:           true,
+		ViewerCertificate: passthroughXML(`<CloudFrontDefaultCertificate>true</CloudFrontDefaultCertificate>`),
+		Restrictions:      passthroughXML(`<GeoRestriction><RestrictionType>none</RestrictionType><Quantity>0</Quantity></GeoRestriction>`),
+		HttpVersion:       "http2",
+		IsIPV6Enabled:     true,
 	}
 
 	for _, node := range filteredNodes {

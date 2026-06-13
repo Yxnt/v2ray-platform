@@ -90,7 +90,6 @@ type Store interface {
 	DeleteNodeGroup(groupID string) error
 	ListNodeGroups() []domain.NodeGroup
 	SetNodeGroupsForNode(nodeID string, groupIDs []string) error
-	SetNodeProxy(nodeID, proxyNodeID string) error
 	ListNodeGroupMemberships() []domain.NodeGroupMembership
 	CreateGroupGrant(groupID, memberID string) error
 	DeleteGroupGrant(groupID, memberID string) error

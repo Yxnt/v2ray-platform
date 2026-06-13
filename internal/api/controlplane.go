@@ -105,7 +105,11 @@ func NewControlPlaneService(st store.Store, sessions *auth.Manager, alerts inter
 func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService, secretCodec *crypto.SecretCodec) http.Handler {
 	svc.secretCodec = secretCodec
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.FS(mustSub(webAssets, "web"))))
+	webFS := http.FileServer(http.FS(mustSub(webAssets, "web")))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, max-age=0")
+		webFS.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -132,7 +136,6 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService, secretCo
 	mux.HandleFunc("PATCH /api/admin/node-groups/{groupID}", withAdmin(cfg, svc.sessions, svc.handleUpdateNodeGroup))
 	mux.HandleFunc("DELETE /api/admin/node-groups/{groupID}", withAdmin(cfg, svc.sessions, svc.handleDeleteNodeGroup))
 	mux.HandleFunc("GET /api/admin/node-group-memberships", withAdmin(cfg, svc.sessions, svc.handleListNodeGroupMemberships))
-	mux.HandleFunc("POST /api/admin/nodes/{nodeID}/proxy", withAdmin(cfg, svc.sessions, svc.handleSetNodeProxy))
 	mux.HandleFunc("POST /api/admin/nodes/{nodeID}/groups", withAdmin(cfg, svc.sessions, svc.handleSetNodeGroups))
 	mux.HandleFunc("DELETE /api/admin/nodes/{nodeID}", withAdmin(cfg, svc.sessions, svc.handleDeleteNode))
 	mux.HandleFunc("GET /api/admin/node-group-grants", withAdmin(cfg, svc.sessions, svc.handleListGroupGrants))
@@ -1065,23 +1068,6 @@ func (svc *ControlPlaneService) handleListNodeGroupMemberships(w http.ResponseWr
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
 }
 
-func (svc *ControlPlaneService) handleSetNodeProxy(w http.ResponseWriter, r *http.Request) {
-	nodeID := r.PathValue("nodeID")
-	var req struct {
-		ProxyNodeID string `json:"proxy_node_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if err := svc.store.SetNodeProxy(nodeID, req.ProxyNodeID); err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "node.proxy_set", "node", nodeID, map[string]any{"proxy_node_id": req.ProxyNodeID})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
 func (svc *ControlPlaneService) handleSetNodeGroups(w http.ResponseWriter, r *http.Request) {
 	nodeID := r.PathValue("nodeID")
 	var req setNodeGroupsRequest
@@ -1934,16 +1920,35 @@ func (svc *ControlPlaneService) handleListCloudFrontDistributions(w http.Respons
 
 // handleCloudFrontScan discovers origins from the CloudFront distribution.
 func (svc *ControlPlaneService) handleCloudFrontScan(w http.ResponseWriter, r *http.Request) {
-	client, _, err := svc.newConfiguredCloudFrontClient()
+	var req struct {
+		DistributionID string `json:"distributionId"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, errors.New("invalid request body"))
+			return
+		}
+	}
+
+	client, cfg, err := svc.newConfiguredCloudFrontClient()
 	if err != nil {
 		writeCloudFrontClientError(w, err)
 		return
 	}
 	scanSvc := cloudfront.NewScanService(svc.store, client)
-	result, err := scanSvc.ScanDistribution(r.Context())
-	if err != nil {
-		writeStoreError(w, err)
-		return
+	var result *cloudfront.ScanResult
+	if strings.TrimSpace(req.DistributionID) != "" {
+		result, err = scanSvc.ScanDistributionByID(r.Context(), strings.TrimSpace(req.DistributionID), cfg.Mode)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+	} else {
+		result, err = scanSvc.ScanDistribution(r.Context())
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
 	}
 	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "cloudfront.scanned", "cloudfront_config", "cf-global", map[string]any{
 		"distribution_id": result.DistributionID,

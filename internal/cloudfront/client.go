@@ -32,6 +32,7 @@ type DistributionState struct {
 	Aliases        []string
 	Origins        []OriginState
 	Behaviors      []BehaviorState
+	Parameters     []ParameterDefinitionState
 }
 
 // OriginState represents a current CloudFront origin.
@@ -44,6 +45,15 @@ type OriginState struct {
 type BehaviorState struct {
 	PathPattern string
 	OriginID    string
+	IsDefault   bool
+}
+
+// ParameterDefinitionState represents one multi-tenant distribution parameter definition.
+type ParameterDefinitionState struct {
+	Name         string `json:"name"`
+	Required     bool   `json:"required"`
+	DefaultValue string `json:"defaultValue,omitempty"`
+	Comment      string `json:"comment,omitempty"`
 }
 
 // Client is the interface for AWS CloudFront operations.
@@ -55,12 +65,12 @@ type Client interface {
 
 // RouteAction is the planner-friendly representation of one CloudFront path mutation.
 type RouteAction struct {
-	Action    string
-	RouteKey  string
-	OriginID  string
-	Host      string
-	GroupName string
-	Reason    string
+	Action    string `json:"action"`
+	RouteKey  string `json:"routeKey"`
+	OriginID  string `json:"originId"`
+	Host      string `json:"host"`
+	GroupName string `json:"groupName"`
+	Reason    string `json:"reason"`
 }
 
 // RewriteRoute maps the stable CloudFront-facing path to the node's actual
