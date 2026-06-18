@@ -1,11 +1,11 @@
 # Pensieve Project State
 
 ## Lifecycle State
-- Last Event: doctor
-- Last Note: doctor summary: status=PASS, must_fix=0, should_fix=0, info=0, next=none
+- Last Event: auto-sync
+- Last Note: refine: verify graph after nil-guard relink
 
 ## Project Paths
-- Project Root: `/Users/yxn/Github/v2ray-platform`
+- Project Root: `/Users/yxn/.codex/worktrees/87ae/v2ray-platform`
 - User Data: `.pensieve/`
 - Runtime State: `.pensieve/.state/`
 

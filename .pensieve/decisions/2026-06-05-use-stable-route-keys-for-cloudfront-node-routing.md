@@ -15,7 +15,7 @@ tags: [cloudfront, routing, nodes, decision]
 
 ## 上下文链接
 - 基于：[[knowledge/cloudfront-subscription-implementation-map/content]]
-- 导致：[[decisions/2026-06-05-keep-dual-subscription-exports-for-node-access-modes]]
+- 相关：[[decisions/2026-06-05-keep-dual-subscription-exports-for-node-access-modes]]
 - 相关：[[knowledge/taste-review/content]]
 
 ## Context

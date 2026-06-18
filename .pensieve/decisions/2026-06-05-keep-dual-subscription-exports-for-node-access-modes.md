@@ -16,6 +16,7 @@ tags: [cloudfront, subscription, clash, decision]
 ## 上下文链接
 - 基于：[[knowledge/cloudfront-subscription-implementation-map/content]]
 - 导致：[[decisions/2026-06-05-use-stable-route-keys-for-cloudfront-node-routing]]
+- 相关：[[knowledge/control-plane-global-settings-pattern/content]]
 - 相关：[[knowledge/taste-review/content]]
 
 ## Context
