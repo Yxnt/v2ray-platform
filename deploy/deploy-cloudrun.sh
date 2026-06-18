@@ -35,6 +35,9 @@ ALERT_WEBHOOK_URL="${CONTROL_PLANE_ALERT_WEBHOOK_URL:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# ── preflight ────────────────────────────────────────────────────────────────
+bash "${SCRIPT_DIR}/preflight-cloudrun.sh"
+
 # ── make sure Artifact Registry repository exists ────────────────────────────
 if [[ "${IMAGE}" == *"docker.pkg.dev"* ]]; then
   REPO_NAME="v2ray-platform"
@@ -84,10 +87,17 @@ SERVICE_URL="$(gcloud run services describe "${CLOUDRUN_SERVICE}" \
   --platform managed --region "${GCP_REGION}" --project "${GCP_PROJECT}" \
   --format 'value(status.url)')"
 
+echo "Verifying deployed service health..."
+if ! curl -fsSL "${SERVICE_URL}/healthz" >/dev/null; then
+  echo "Cloud Run service deployed but health check failed: ${SERVICE_URL}/healthz" >&2
+  exit 1
+fi
+
 echo ""
 echo "✓ Deployed: ${SERVICE_URL}"
 echo ""
 echo "Next steps:"
-echo "  1. Open ${SERVICE_URL} to verify the admin UI loads."
-echo "  2. Log in with ${BOOTSTRAP_ADMIN_EMAIL}."
-echo "  3. Add nodes via the '+ Add Node' panel in the Nodes tab."
+echo "  1. Health check passed at ${SERVICE_URL}/healthz."
+echo "  2. Open ${SERVICE_URL} to verify the admin UI loads."
+echo "  3. Log in with ${BOOTSTRAP_ADMIN_EMAIL}."
+echo "  4. Add nodes via the '+ Add Node' panel in the Nodes tab."

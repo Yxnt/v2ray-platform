@@ -1,34 +1,21 @@
 # Deployment guide
 
-## Recommended lean hosted setup
+## Recommended deployment path
 
-For the smallest operational footprint, use:
+For this repository's default production path, use:
 
-- **Google Cloud Run** for the `control-plane`
-- **Neon** for PostgreSQL
+- **A normal Linux server reachable over SSH** for the `control-plane`
+- **The published image `ghcr.io/yxnt/v2ray-platform-control-plane:latest`**
+- **Bundled Postgres in Docker Compose** or an external PostgreSQL DSN if you already have one
 
-Why this is the best fit:
+Why this is the default:
 
-- Cloud Run can scale to zero, so an infrequently used admin panel does not need an always-on VM.
-- Neon has a free PostgreSQL tier and scales compute down when idle.
-- You do not need to keep an extra management server running yourself.
+- Another LLM can deploy end-to-end with only SSH and Docker Compose.
+- The same artifact can be reused across servers without rebuilding on the target host.
+- The deploy script can optionally restore a PostgreSQL dump during first bring-up.
 
-## Free-tier reality check
-
-“Free forever” app hosting is unstable across vendors, so the practical answer is:
-
-- **Best current low-ops option:** Cloud Run + Neon
-- **Not ideal for true free-only expectations:** Railway, Fly.io, Koyeb
-
-Current caveats:
-
-- **Cloud Run** has a free tier, but usually requires enabling billing on a Google Cloud account.
-- **Neon** has a free PostgreSQL tier.
-- **Railway** is no longer truly free long term; after the trial, pricing starts at `$1/month` on the free plan page.
-- **Fly.io** is usage billed and requires a card on file.
-- **Koyeb** pricing currently emphasizes paid usage and serverless billing; it is not the safest assumption for a stable free control plane.
-
-If you want the most realistic “almost free” production-like path, choose **Cloud Run + Neon**.
+Cloud Run remains supported as an optional path, but it is no longer the
+default assumption for automation agents.
 
 ## What gets deployed
 
@@ -65,15 +52,57 @@ The app automatically:
 docker build -t v2ray-platform-control-plane .
 ```
 
+## Deploy to a normal Linux server over SSH
+
+The canonical handoff for other LLMs or automation agents is documented in
+[`docs/llm-deploy-handoff.md`](../docs/llm-deploy-handoff.md). Treat that file,
+`deploy/deploy-auto.sh`, and `deploy/server.env.example` as the default
+deployment surface.
+
+Start from the env template:
+
+```sh
+cp deploy/server.env.example /tmp/v2ray-platform-server.env
+# edit the copied file with real values
+. /tmp/v2ray-platform-server.env
+```
+
+Then run:
+
+```sh
+bash deploy/preflight-auto.sh
+bash deploy/deploy-auto.sh
+```
+
+Equivalent `make` entrypoints:
+
+```sh
+make deploy-preflight
+make deploy
+```
+
+The server deploy script will:
+1. Validate local env vars, tools, and SSH connectivity.
+2. Validate that the remote host has `docker` and `docker compose`.
+3. Upload the repository and a generated `.env.server` file to the remote host.
+4. Restore `POSTGRES_RESTORE_DUMP` into the bundled Postgres container when provided.
+5. Pull `CONTROL_PLANE_IMAGE` from GHCR and start the control-plane container.
+6. Verify `GET /healthz` on `CONTROL_PLANE_PUBLIC_URL`.
+
 ## Deploy to Cloud Run
 
 There are two ways to deploy: **automatic via GitHub Actions** or **manual via script**.
 
+For a ready-to-fill env template, start from
+[`deploy/cloudrun.env.example`](./cloudrun.env.example).
+
 ### Option A — GitHub Actions (recommended)
 
 Push to `main` and the workflow in `.github/workflows/deploy.yml` will:
-1. Build and push the Docker image to **GitHub Container Registry** (`ghcr.io`).
-2. Deploy the new image to Cloud Run.
+1. Authenticate to Google Cloud with `GCP_SA_KEY`.
+2. Validate the required repository secrets and variables.
+3. Run `bash deploy/deploy-cloudrun.sh`.
+4. Build, push, and deploy the control-plane image to Cloud Run.
 
 **One-time GitHub setup** (Settings → Secrets and variables):
 
@@ -90,8 +119,10 @@ Push to `main` and the workflow in `.github/workflows/deploy.yml` will:
 
 | Variable | Default | Override example |
 |----------|---------|-----------------|
+| `GCP_PROJECT` | none | `my-gcp-project` |
 | `GCP_REGION` | `asia-east1` | `us-central1` |
 | `CLOUDRUN_SERVICE` | `v2ray-platform` | `my-cp` |
+| `IMAGE` | derived by script | `us-central1-docker.pkg.dev/my-gcp-project/v2ray-platform/control-plane` |
 
 **GCP service account minimum roles:**
 ```sh
@@ -103,13 +134,17 @@ gcloud projects add-iam-policy-binding YOUR_PROJECT \
   --role="roles/iam.serviceAccountUser"
 ```
 
-Cloud Run needs permission to pull from `ghcr.io`. Either make the package public
-(recommended for this project) in your GitHub Package settings, or configure
-[authenticated pulls](https://cloud.google.com/run/docs/deploying#other-registries).
+By default the deploy script uses Artifact Registry in the same GCP project and
+region. If you override `IMAGE`, make sure the target registry is reachable from
+Cloud Run and that your deploy identity can push to it.
 
 ### Option B — one-shot local script
 
 ```sh
+cp deploy/cloudrun.env.example /tmp/v2ray-platform-cloudrun.env
+# edit the copied file with real values
+. /tmp/v2ray-platform-cloudrun.env
+
 export GCP_PROJECT=your-project-id
 export DATABASE_URL='postgres://user:pass@host/db?sslmode=require'
 export BOOTSTRAP_ADMIN_EMAIL=admin@example.com
@@ -120,21 +155,29 @@ export CONTROL_PLANE_SESSION_SECRET=$(openssl rand -hex 32)
 export GCP_REGION=asia-east1
 export CLOUDRUN_SERVICE=v2ray-platform
 
-bash deploy/deploy-cloudrun.sh
+bash deploy/preflight-auto.sh
+bash deploy/deploy-auto.sh
+```
+
+Equivalent `make` entrypoints:
+
+```sh
+make deploy-preflight
+make deploy
 ```
 
 The script will:
 1. Create an Artifact Registry repository if needed.
 2. Build the Docker image and push it tagged with the current git SHA + `latest`.
 3. Deploy to Cloud Run with all required env vars.
-4. Print the service URL when done.
-
+4. Verify `GET /healthz` on the deployed service.
+5. Print the service URL when done.
 
 ## First login and usage
 
 After deploy:
 
-1. Open the Cloud Run URL.
+1. Open the control-plane URL.
 2. Log in with `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`.
 3. In the **Nodes** tab, click **＋ Add Node**, fill in the form, and copy the generated one-liner to bootstrap each node.
 4. Manage members, grants, revocations, and audit logs in the built-in UI.

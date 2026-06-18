@@ -42,40 +42,44 @@ go run ./cmd/control-plane
 
 访问 http://localhost:8080 打开管理界面。
 
-### 2.2 生产环境部署 (Cloud Run + Neon)
+### 2.2 生产环境部署（默认：SSH 服务器 + GHCR）
 
-#### 第一步：准备 Neon PostgreSQL
+#### 第一步：准备可 SSH 连接的 Linux 服务器
 
-1. 访问 [neon.tech](https://neon.tech) 创建免费账户
-2. 创建新项目，获取连接字符串
-3. 连接字符串格式：`postgres://user:pass@host/dbname?sslmode=require`
+1. 确认目标主机可以通过 SSH 访问
+2. 确认目标主机已安装 `docker` 和 `docker compose`
+3. 决定使用内置 Postgres 容器，还是自己提供外部 `DATABASE_URL`
 
-#### 第二步：部署到 Cloud Run
-
-**方式 A：GitHub Actions (推荐)**
-
-1. Fork 项目到你的 GitHub 账户
-2. 在 Settings → Secrets and variables → Actions 中添加：
-
-| Secret 名称 | 值 |
-|------------|-----|
-| `GCP_SA_KEY` | GCP 服务账号 JSON 密钥 |
-| `DATABASE_URL` | Neon 连接字符串 |
-| `BOOTSTRAP_ADMIN_EMAIL` | 管理员邮箱 |
-| `BOOTSTRAP_ADMIN_PASSWORD` | 管理员密码 |
-| `CONTROL_PLANE_SESSION_SECRET` | 随机字符串 (生成: `openssl rand -hex 32`) |
-
-3. 推送到 main 分支，自动触发部署
-
-**方式 B：手动脚本部署**
+#### 第二步：加载服务端部署环境变量
 
 ```bash
-export GCP_PROJECT=your-project-id
-export DATABASE_URL='postgres://user:pass@host/db?sslmode=require'
-export BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-export BOOTSTRAP_ADMIN_PASSWORD=changeme
-export CONTROL_PLANE_SESSION_SECRET=$(openssl rand -hex 32)
+cp deploy/server.env.example /tmp/v2ray-platform-server.env
+# edit the copied file with real values
+. /tmp/v2ray-platform-server.env
+```
 
+关键变量：
+
+- `DEPLOY_HOST`
+- `DEPLOY_PATH`
+- `CONTROL_PLANE_PUBLIC_URL`
+- `CONTROL_PLANE_IMAGE`，默认值：`ghcr.io/yxnt/v2ray-platform-control-plane:latest`
+- `POSTGRES_RESTORE_DUMP`，可选，用于首次部署时恢复数据库备份
+
+#### 第三步：执行预检和部署
+
+```bash
+bash deploy/preflight-auto.sh
+bash deploy/deploy-auto.sh
+```
+
+脚本会自动上传仓库、生成 `.env.server`、按需恢复 Postgres 备份、从
+GHCR 拉取镜像，并启动 control-plane 容器。
+
+#### 可选：Cloud Run 部署
+
+```bash
+bash deploy/preflight-cloudrun.sh
 bash deploy/deploy-cloudrun.sh
 ```
 
@@ -93,7 +97,7 @@ docker run -p 8080:8080 \
 
 ### 3.1 登录管理界面
 
-1. 打开部署后的 URL (如 `https://v2ray-platform-xxxxxx.run.app`)
+1. 打开部署后的 URL（例如 `https://control-plane.example.com`）
 2. 使用 `BOOTSTRAP_ADMIN_EMAIL` 和 `BOOTSTRAP_ADMIN_PASSWORD` 登录
 3. **重要**：首次登录后立即修改密码
 

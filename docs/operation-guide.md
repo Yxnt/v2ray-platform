@@ -42,40 +42,44 @@ go run ./cmd/control-plane
 
 Open http://localhost:8080 to access the admin UI.
 
-### 2.2 Production Deployment (Cloud Run + Neon)
+### 2.2 Production Deployment (Default: SSH Server + GHCR)
 
-#### Step 1: Set up Neon PostgreSQL
+#### Step 1: Prepare a Linux server with Docker Compose
 
-1. Visit [neon.tech](https://neon.tech) and create a free account
-2. Create a new project and get the connection string
-3. Connection string format: `postgres://user:pass@host/dbname?sslmode=require`
+1. Ensure the target host is reachable over SSH
+2. Ensure `docker` and `docker compose` are installed on the target host
+3. Decide whether to use the bundled Postgres container or an external `DATABASE_URL`
 
-#### Step 2: Deploy to Cloud Run
-
-**Option A: GitHub Actions (Recommended)**
-
-1. Fork the project to your GitHub account
-2. Go to Settings → Secrets and variables → Actions and add:
-
-| Secret Name | Value |
-|------------|-------|
-| `GCP_SA_KEY` | GCP service account JSON key |
-| `DATABASE_URL` | Neon connection string |
-| `BOOTSTRAP_ADMIN_EMAIL` | Admin email |
-| `BOOTSTRAP_ADMIN_PASSWORD` | Admin password |
-| `CONTROL_PLANE_SESSION_SECRET` | Random string (generate: `openssl rand -hex 32`) |
-
-3. Push to main branch to trigger automatic deployment
-
-**Option B: Manual Script Deployment**
+#### Step 2: Load the server deploy environment
 
 ```bash
-export GCP_PROJECT=your-project-id
-export DATABASE_URL='postgres://user:pass@host/db?sslmode=require'
-export BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-export BOOTSTRAP_ADMIN_PASSWORD=changeme
-export CONTROL_PLANE_SESSION_SECRET=$(openssl rand -hex 32)
+cp deploy/server.env.example /tmp/v2ray-platform-server.env
+# edit the copied file with real values
+. /tmp/v2ray-platform-server.env
+```
 
+Important variables:
+
+- `DEPLOY_HOST`
+- `DEPLOY_PATH`
+- `CONTROL_PLANE_PUBLIC_URL`
+- `CONTROL_PLANE_IMAGE` default: `ghcr.io/yxnt/v2ray-platform-control-plane:latest`
+- `POSTGRES_RESTORE_DUMP` optional local dump path to restore on first deploy
+
+#### Step 3: Run preflight and deploy
+
+```bash
+bash deploy/preflight-auto.sh
+bash deploy/deploy-auto.sh
+```
+
+The deploy script uploads the repo, writes `.env.server`, restores the optional
+Postgres dump, pulls the GHCR image, and starts the control-plane container.
+
+#### Optional: Cloud Run deployment
+
+```bash
+bash deploy/preflight-cloudrun.sh
 bash deploy/deploy-cloudrun.sh
 ```
 
@@ -93,7 +97,7 @@ docker run -p 8080:8080 \
 
 ### 3.1 Login to Admin UI
 
-1. Open the deployed URL (e.g., `https://v2ray-platform-xxxxxx.run.app`)
+1. Open the deployed URL (for example `https://control-plane.example.com`)
 2. Login with `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`
 3. **Important**: Change password immediately after first login
 
