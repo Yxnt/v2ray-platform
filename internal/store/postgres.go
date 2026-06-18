@@ -1088,6 +1088,35 @@ func (s *PostgresStore) RecordUsage(nodeToken string, snapshots []domain.UsageSn
 	return tx.Commit()
 }
 
+func (s *PostgresStore) GetPlatformSettings() (*domain.PlatformSettings, error) {
+	var settings domain.PlatformSettings
+	err := s.db.QueryRow(
+		`SELECT id, usage_collection_enabled, created_at, updated_at
+		 FROM platform_settings
+		 WHERE id = 'platform-global'`,
+	).Scan(&settings.ID, &settings.UsageCollectionEnabled, &settings.CreatedAt, &settings.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, mapPQError(err)
+	}
+	return &settings, nil
+}
+
+func (s *PostgresStore) SavePlatformSettings(input SavePlatformSettingsInput) error {
+	now := time.Now().UTC()
+	_, err := s.db.Exec(
+		`INSERT INTO platform_settings (id, usage_collection_enabled, created_at, updated_at)
+		 VALUES ('platform-global', $1, $2, $2)
+		 ON CONFLICT (id) DO UPDATE SET
+		   usage_collection_enabled = EXCLUDED.usage_collection_enabled,
+		   updated_at = EXCLUDED.updated_at`,
+		input.UsageCollectionEnabled, now,
+	)
+	return mapPQError(err)
+}
+
 func (s *PostgresStore) ListNodes() []domain.Node {
 	rows, err := s.db.Query(
 		`SELECT id, name, region, public_host, provider, tags::text, runtime_flavor, proxy_node_id, route_key, status, last_heartbeat_at, current_config_version, node_token_hash, created_at, updated_at

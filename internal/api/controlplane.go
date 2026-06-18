@@ -149,6 +149,8 @@ func NewRouter(cfg config.ControlPlaneConfig, svc *ControlPlaneService, secretCo
 	mux.HandleFunc("POST /api/admin/nodes/batch-rebuild", withAdmin(cfg, svc.sessions, svc.handleBatchRebuildNodes))
 	mux.HandleFunc("GET /api/admin/usage/nodes", withAdmin(cfg, svc.sessions, svc.handleListNodeUsage))
 	mux.HandleFunc("GET /api/admin/usage/members", withAdmin(cfg, svc.sessions, svc.handleListMemberUsage))
+	mux.HandleFunc("GET /api/admin/settings/platform", withAdmin(cfg, svc.sessions, svc.handleGetPlatformSettings))
+	mux.HandleFunc("POST /api/admin/settings/platform", withAdmin(cfg, svc.sessions, svc.handleSavePlatformSettings))
 	mux.HandleFunc("GET /api/admin/export/{resource}", withAdmin(cfg, svc.sessions, svc.handleExportResource))
 	mux.HandleFunc("GET /api/admin/sync-events", withAdmin(cfg, svc.sessions, svc.handleListSyncEvents))
 	mux.HandleFunc("GET /api/admin/audit-logs", withAdmin(cfg, svc.sessions, svc.handleListAuditLogs))
@@ -319,6 +321,10 @@ type syncResultRequest struct {
 
 type usageRequest struct {
 	Snapshots []domain.UsageSnapshot `json:"snapshots"`
+}
+
+type savePlatformSettingsRequest struct {
+	UsageCollectionEnabled bool `json:"usageCollectionEnabled"`
 }
 
 func (svc *ControlPlaneService) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
@@ -1290,6 +1296,43 @@ func (svc *ControlPlaneService) handleListNodeUsage(w http.ResponseWriter, r *ht
 
 func (svc *ControlPlaneService) handleListMemberUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": svc.store.ListMemberUsageSummaries()})
+}
+
+func (svc *ControlPlaneService) handleGetPlatformSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := svc.store.GetPlatformSettings()
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusOK, domain.PlatformSettings{
+			ID:                     "platform-global",
+			UsageCollectionEnabled: false,
+		})
+		return
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (svc *ControlPlaneService) handleSavePlatformSettings(w http.ResponseWriter, r *http.Request) {
+	var req savePlatformSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := svc.store.SavePlatformSettings(store.SavePlatformSettingsInput{
+		UsageCollectionEnabled: req.UsageCollectionEnabled,
+	}); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	_ = svc.store.RecordAuditLog(actorAdminID(r.Context()), "platform_settings.saved", "platform_settings", "platform-global", map[string]any{
+		"usageCollectionEnabled": req.UsageCollectionEnabled,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":                 "ok",
+		"usageCollectionEnabled": req.UsageCollectionEnabled,
+	})
 }
 
 func (svc *ControlPlaneService) handleExportResource(w http.ResponseWriter, r *http.Request) {

@@ -49,8 +49,8 @@ type Tier struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
-	QuotaBytes  int64     `json:"quota_bytes"`  // quota in bytes; 0 = unlimited
-	QuotaType   string    `json:"quota_type"`   // "monthly" = resets each calendar month; "fixed" = all-time
+	QuotaBytes  int64     `json:"quota_bytes"` // quota in bytes; 0 = unlimited
+	QuotaType   string    `json:"quota_type"`  // "monthly" = resets each calendar month; "fixed" = all-time
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -215,6 +215,13 @@ type MemberUsageSummary struct {
 	DownlinkBytes int64  `json:"downlink_bytes"`
 	TotalBytes    int64  `json:"total_bytes"`
 	SnapshotCount int64  `json:"snapshot_count"`
+}
+
+type PlatformSettings struct {
+	ID                     string    `json:"id"`
+	UsageCollectionEnabled bool      `json:"usageCollectionEnabled"`
+	CreatedAt              time.Time `json:"createdAt"`
+	UpdatedAt              time.Time `json:"updatedAt"`
 }
 
 type AlertSeverity string

@@ -84,6 +84,7 @@ type MemoryStore struct {
 	usageSnapshots   []memoryUsageSnapshot
 	pendingRemovals  []domain.PendingUserRemoval
 	pendingAdditions []domain.PendingUserAddition
+	platformSettings *domain.PlatformSettings
 	cloudFrontConfig *domain.CloudFrontConfig
 }
 
@@ -793,6 +794,33 @@ func (s *MemoryStore) RecordUsage(nodeToken string, snapshots []domain.UsageSnap
 			CollectedAt:    collectedAt,
 		})
 	}
+	return nil
+}
+
+func (s *MemoryStore) GetPlatformSettings() (*domain.PlatformSettings, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.platformSettings == nil {
+		return nil, ErrNotFound
+	}
+	return clonePlatformSettings(s.platformSettings), nil
+}
+
+func (s *MemoryStore) SavePlatformSettings(input SavePlatformSettingsInput) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if s.platformSettings == nil {
+		s.platformSettings = &domain.PlatformSettings{
+			ID:                     "platform-global",
+			UsageCollectionEnabled: input.UsageCollectionEnabled,
+			CreatedAt:              now,
+			UpdatedAt:              now,
+		}
+		return nil
+	}
+	s.platformSettings.UsageCollectionEnabled = input.UsageCollectionEnabled
+	s.platformSettings.UpdatedAt = now
 	return nil
 }
 

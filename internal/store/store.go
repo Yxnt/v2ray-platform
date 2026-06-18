@@ -62,6 +62,10 @@ type UpdateCloudFrontSyncInput struct {
 	PreserveSyncStatus     bool
 }
 
+type SavePlatformSettingsInput struct {
+	UsageCollectionEnabled bool
+}
+
 type Store interface {
 	EnsureAdmin(email, passwordHash string) (*domain.Admin, error)
 	FindAdminByEmail(email string) (*domain.Admin, error)
@@ -98,6 +102,8 @@ type Store interface {
 	RevokeGrant(grantID string) error
 	DeleteMember(memberID string) error
 	RecordUsage(nodeToken string, snapshots []domain.UsageSnapshot) error
+	GetPlatformSettings() (*domain.PlatformSettings, error)
+	SavePlatformSettings(input SavePlatformSettingsInput) error
 	ListNodes() []domain.Node
 	DeleteNode(nodeID string) error
 	ListMembers() []domain.Member

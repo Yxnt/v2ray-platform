@@ -1,15 +1,17 @@
 package api
 
 import (
-"bytes"
-"crypto/md5"
-"errors"
-"fmt"
-"io"
-"net/http"
-"strings"
-"text/template"
-"time"
+	"bytes"
+	"crypto/md5"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"text/template"
+	"time"
+
+	"v2ray-platform/internal/store"
 )
 
 var installScriptTmpl = template.Must(template.New("install").Parse(`#!/usr/bin/env bash
@@ -24,7 +26,7 @@ NODE_TAGS="{{.Tags}}"
 RUNTIME_FLAVOR="{{.Flavor}}"
 V2RAY_INSTALL_DIR="/usr/local/v2ray"
 V2RAY_CONFIG="${V2RAY_INSTALL_DIR}/config.json"
-NODE_USAGE_SOURCE="runtime"
+NODE_USAGE_SOURCE="{{.UsageSource}}"
 NODE_USAGE_QUERY_SERVER="127.0.0.1:10085"
 NODE_USAGE_QUERY_COMMAND="${V2RAY_INSTALL_DIR}/v2ray api stats --server=127.0.0.1:10085 -json"
 NODE_USAGE_COLLECTION_INTERVAL_SECONDS="600"
@@ -188,67 +190,79 @@ echo "Node '${NODE_NAME}' bootstrap complete."
 `))
 
 type installScriptData struct {
-ControlPlaneURL string
-Token           string
-Name            string
-Region          string
-Host            string
-Tags            string
-Flavor          string
+	ControlPlaneURL string
+	Token           string
+	Name            string
+	Region          string
+	Host            string
+	Tags            string
+	Flavor          string
+	UsageSource     string
 }
 
 func (svc *ControlPlaneService) handleInstallScript(w http.ResponseWriter, r *http.Request) {
-token := r.URL.Query().Get("token")
-if token == "" {
-http.Error(w, "token query parameter is required", http.StatusBadRequest)
-return
-}
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "token query parameter is required", http.StatusBadRequest)
+		return
+	}
 
-scheme := "https"
-if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" {
-scheme = "http"
-}
-cpURL := scheme + "://" + r.Host
+	scheme := "https"
+	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" {
+		scheme = "http"
+	}
+	cpURL := scheme + "://" + r.Host
 
-flavor := r.URL.Query().Get("flavor")
-if flavor == "" {
-flavor = "v2ray"
-}
+	flavor := r.URL.Query().Get("flavor")
+	if flavor == "" {
+		flavor = "v2ray"
+	}
 
-data := installScriptData{
-ControlPlaneURL: cpURL,
-Token:           token,
-Name:            r.URL.Query().Get("name"),
-Region:          r.URL.Query().Get("region"),
-Host:            r.URL.Query().Get("host"),
-Tags:            r.URL.Query().Get("tags"),
-Flavor:          flavor,
-}
+	usageSource := "disabled"
+	if settings, err := svc.store.GetPlatformSettings(); err == nil {
+		if settings.UsageCollectionEnabled {
+			usageSource = "runtime"
+		}
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		http.Error(w, "failed to load platform settings", http.StatusInternalServerError)
+		return
+	}
 
-var buf bytes.Buffer
-if err := installScriptTmpl.Execute(&buf, data); err != nil {
-http.Error(w, "failed to render install script", http.StatusInternalServerError)
-return
-}
+	data := installScriptData{
+		ControlPlaneURL: cpURL,
+		Token:           token,
+		Name:            r.URL.Query().Get("name"),
+		Region:          r.URL.Query().Get("region"),
+		Host:            r.URL.Query().Get("host"),
+		Tags:            r.URL.Query().Get("tags"),
+		Flavor:          flavor,
+		UsageSource:     usageSource,
+	}
 
-w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-w.Header().Set("Content-Disposition", `inline; filename="install.sh"`)
-w.WriteHeader(http.StatusOK)
-_, _ = w.Write(buf.Bytes())
+	var buf bytes.Buffer
+	if err := installScriptTmpl.Execute(&buf, data); err != nil {
+		http.Error(w, "failed to render install script", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `inline; filename="install.sh"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func (svc *ControlPlaneService) handleNodeAgentBinary(w http.ResponseWriter, r *http.Request) {
-if svc.agentDownloadURL == "" {
-writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-"error": "agent binary not available: set AGENT_DOWNLOAD_URL",
-})
-return
-}
-target := svc.agentDownloadURL
-if r.URL.Query().Get("arch") == "arm64" {
-target = strings.ReplaceAll(target, "amd64", "arm64")
-}
-http.Redirect(w, r, target, http.StatusFound)
+	if svc.agentDownloadURL == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "agent binary not available: set AGENT_DOWNLOAD_URL",
+		})
+		return
+	}
+	target := svc.agentDownloadURL
+	if r.URL.Query().Get("arch") == "arm64" {
+		target = strings.ReplaceAll(target, "amd64", "arm64")
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func (svc *ControlPlaneService) handleNodeAgentMD5(w http.ResponseWriter, r *http.Request) {
