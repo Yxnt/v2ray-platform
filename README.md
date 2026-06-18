@@ -63,6 +63,16 @@ The default production path is:
 Cloud Run remains supported, but another LLM should not assume GCP unless the
 user explicitly asks for it.
 
+## Codex skill
+
+This repository ships a deploy skill for Codex users at
+[`skills/deploy-v2ray-platform/`](skills/deploy-v2ray-platform/).
+
+For installation, usage examples, prompts for any LLM, auto-generated bootstrap
+values, and node cleanup notes, see:
+
+- [docs/ai-deploy-guide.md](docs/ai-deploy-guide.md)
+
 ## Documentation
 
 | Doc | Description |
@@ -72,8 +82,10 @@ user explicitly asks for it.
 | [docs/subscription.md](docs/subscription.md) | Clash subscription, tiers, quota, proxy chain |
 | [docs/roadmap.md](docs/roadmap.md) | Planned features |
 | [deploy/README.md](deploy/README.md) | Deployment guide |
+| [docs/ai-deploy-guide.md](docs/ai-deploy-guide.md) | AI-facing deploy guide, prompts, and skill usage |
 | [docs/llm-deploy-handoff.md](docs/llm-deploy-handoff.md) | LLM-facing deployment handoff and CI contract |
 | [deploy/server.env.example](deploy/server.env.example) | SSH server deploy env template |
+| [skills/deploy-v2ray-platform/SKILL.md](skills/deploy-v2ray-platform/SKILL.md) | Codex deploy skill for this repository |
 
 ## Acknowledgements
 
