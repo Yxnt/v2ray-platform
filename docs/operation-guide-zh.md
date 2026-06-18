@@ -213,3 +213,214 @@ Clash 客户端会自动显示：
 ## 6. 节点管理
 
 ### 6.1 节点状态说明
+
+| 状态 | 含义 |
+|-----|------|
+| **online** | 节点正常运行，心跳正常 |
+| **offline** | 节点离线，心跳超时 (默认 15 分钟) |
+| **provisioning** | 节点正在配置中 |
+| **degraded** | 节点性能下降 |
+
+### 6.2 重建节点配置
+
+当修改节点配置后，需要重建：
+
+1. 在 **Nodes** 标签页选择节点
+2. 点击 **↺ Rebuild** 按钮
+3. 等待节点拉取新配置
+
+### 6.3 节点配置回滚
+
+1. 点击节点的 **Config** 按钮
+2. 查看配置历史 (保留最近 3 个版本)
+3. 选择要回滚的版本
+4. 点击 **Rollback**
+
+### 6.4 删除节点
+
+1. 在 **Nodes** 标签页选择节点
+2. 点击 **✕** 按钮
+3. 确认删除
+
+## 7. 告警与监控
+
+### 7.1 查看告警
+
+1. 进入 **Logs & Alerts** 标签页
+2. 查看 **Alerts** 区域：
+   - **Node heartbeat overdue**：节点心跳超时
+   - **Latest config sync failed**：配置同步失败
+   - **Member quota exceeded**：会员配额超限
+   - **Member expired**：会员已过期
+
+### 7.2 配置 Webhook 告警
+
+设置环境变量：
+```bash
+export CONTROL_PLANE_ALERT_WEBHOOK_URL=https://your-webhook-url
+```
+
+### 7.3 审计日志
+
+在 **Logs & Alerts** 标签页查看：
+- **Audit logs**：记录所有管理操作
+- 支持导出 CSV
+
+## 8. CloudFront 集成 (可选)
+
+### 8.1 配置 AWS 凭证
+
+1. 进入 **CloudFront** 标签页
+2. 填写：
+   - **Access Key ID**
+   - **Secret Access Key**
+   - **Region**
+3. 点击 **Save**
+
+### 8.2 绑定现有 CloudFront 分发
+
+1. 点击 **Scan distributions** 扫描可用分发
+2. 选择目标分发
+3. 点击 **Bind**
+
+### 8.3 同步路由
+
+1. 查看 **Sync Preview** 预览变更
+2. 点击 **Sync** 执行同步
+3. 等待 CloudFront 部署完成
+
+### 8.4 CloudFront 订阅
+
+同步完成后，会员可使用 CloudFront 订阅：
+- 点击 **CF↓** 下载 Clash 配置
+- 或点击 **Sub CF🔗** 复制订阅链接
+
+## 9. 常用 API
+
+### 9.1 管理员 API
+
+```bash
+# 登录获取 Session Token
+curl -X POST http://localhost:8080/api/admin/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"changeme"}'
+
+# 列出节点
+curl http://localhost:8080/api/admin/nodes \
+  -H 'Authorization: Bearer <session-token>'
+
+# 列出会员
+curl http://localhost:8080/api/admin/members \
+  -H 'Authorization: Bearer <session-token>'
+
+# 创建授权
+curl -X POST http://localhost:8080/api/admin/grants \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <session-token>' \
+  -d '{"member_id":"<member-id>","node_id":"<node-id>"}'
+```
+
+### 9.2 节点 Agent API
+
+```bash
+# 心跳上报
+curl -X POST http://localhost:8080/api/agent/heartbeat \
+  -H 'Authorization: Bearer <node-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"applied_config_version":1,"public_host":"1.2.3.4"}'
+
+# 上报流量使用
+curl -X POST http://localhost:8080/api/agent/usage \
+  -H 'Authorization: Bearer <node-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"snapshots":[{"credential_uuid":"xxx","uplink":1234,"downlink":5678}]}'
+```
+
+## 10. 故障排查
+
+### 10.1 节点无法连接
+
+1. 检查节点状态是否为 **online**
+2. 检查服务器防火墙是否开放端口
+3. 查看 node-agent 日志：
+   ```bash
+   journalctl -u v2ray-platform-node-agent -f
+   ```
+
+### 10.2 流量统计不显示
+
+1. 确认 `NODE_USAGE_SOURCE=runtime`
+2. 确认 V2Ray 统计 API 已启用 (端口 10085)
+3. 手动测试统计命令：
+   ```bash
+   /usr/local/v2ray/v2ray api stats --server=127.0.0.1:10085 -json
+   ```
+
+### 10.3 配置同步失败
+
+1. 在 **Logs & Alerts** 查看具体错误信息
+2. 检查节点网络连接
+3. 尝试手动重建配置
+
+### 10.4 数据库连接问题
+
+```bash
+# 测试数据库连接
+psql $DATABASE_URL -c "SELECT 1"
+
+# 检查连接池状态
+curl http://localhost:8080/api/admin/debug/health
+```
+
+## 11. 维护操作
+
+### 11.1 备份数据库
+
+```bash
+# Neon 用户
+# 在 Neon 控制台使用 Backup 功能
+
+# 自建 PostgreSQL
+pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql
+```
+
+### 11.2 更新 Node Agent
+
+Node Agent 支持自动更新：
+1. 推送新版本到 GitHub Releases
+2. Agent 在下次心跳时自动检测并更新
+3. 更新后自动重启
+
+### 11.3 更新 Control Plane
+
+```bash
+# 发布新的 control-plane 镜像
+git push origin main
+
+# 或者在你自己的运行环境里更新代码/镜像后重启 control-plane
+```
+
+## 12. 环境变量参考
+
+### Control Plane
+
+| 变量 | 默认值 | 说明 |
+|-----|-------|------|
+| `DATABASE_URL` | - | PostgreSQL 连接字符串 |
+| `BOOTSTRAP_ADMIN_EMAIL` | - | 首次启动创建的管理员邮箱 |
+| `BOOTSTRAP_ADMIN_PASSWORD` | - | 首次启动创建的管理员密码 |
+| `CONTROL_PLANE_SESSION_SECRET` | 自动生成 | 会话签名密钥 |
+| `PORT` | 8080 | 监听端口 |
+| `CONTROL_PLANE_NODE_OFFLINE_SECONDS` | 900 | 节点离线判定时间 (秒) |
+
+### Node Agent
+
+| 变量 | 默认值 | 说明 |
+|-----|-------|------|
+| `CONTROL_PLANE_URL` | - | 控制面板地址 |
+| `BOOTSTRAP_TOKEN` | - | 首次启动的引导令牌 |
+| `NODE_NAME` | - | 节点名称 |
+| `NODE_REGION` | - | 节点区域 |
+| `NODE_PUBLIC_HOST` | - | 节点公网地址 |
+| `NODE_USAGE_SOURCE` | disabled | 流量统计来源 (runtime/file) |
+| `NODE_USAGE_QUERY_SERVER` | 127.0.0.1:10085 | V2Ray 统计 API 地址 |

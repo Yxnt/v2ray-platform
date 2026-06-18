@@ -213,3 +213,214 @@ Clash client automatically displays:
 ## 6. Node Management
 
 ### 6.1 Node Status Explanation
+
+| Status | Meaning |
+|--------|---------|
+| **online** | Node running normally, heartbeat OK |
+| **offline** | Node offline, heartbeat timeout (default 15 minutes) |
+| **provisioning** | Node being configured |
+| **degraded** | Node performance degraded |
+
+### 6.2 Rebuild Node Configuration
+
+After modifying node configuration, rebuild is required:
+
+1. Select node in **Nodes** tab
+2. Click **↺ Rebuild** button
+3. Wait for node to pull new configuration
+
+### 6.3 Node Configuration Rollback
+
+1. Click **Config** button on the node
+2. View configuration history (keeps last 3 versions)
+3. Select version to rollback
+4. Click **Rollback**
+
+### 6.4 Delete Node
+
+1. Select node in **Nodes** tab
+2. Click **✕** button
+3. Confirm deletion
+
+## 7. Alerts & Monitoring
+
+### 7.1 View Alerts
+
+1. Go to **Logs & Alerts** tab
+2. View **Alerts** section:
+   - **Node heartbeat overdue**: Node heartbeat timeout
+   - **Latest config sync failed**: Configuration sync failed
+   - **Member quota exceeded**: Member quota exceeded
+   - **Member expired**: Member expired
+
+### 7.2 Configure Webhook Alerts
+
+Set environment variable:
+```bash
+export CONTROL_PLANE_ALERT_WEBHOOK_URL=https://your-webhook-url
+```
+
+### 7.3 Audit Logs
+
+View in **Logs & Alerts** tab:
+- **Audit logs**: Records all management operations
+- Supports CSV export
+
+## 8. CloudFront Integration (Optional)
+
+### 8.1 Configure AWS Credentials
+
+1. Go to **CloudFront** tab
+2. Fill in:
+   - **Access Key ID**
+   - **Secret Access Key**
+   - **Region**
+3. Click **Save**
+
+### 8.2 Bind Existing CloudFront Distribution
+
+1. Click **Scan distributions** to scan available distributions
+2. Select target distribution
+3. Click **Bind**
+
+### 8.3 Sync Routes
+
+1. View **Sync Preview** to preview changes
+2. Click **Sync** to execute sync
+3. Wait for CloudFront deployment to complete
+
+### 8.4 CloudFront Subscription
+
+After sync completes, members can use CloudFront subscription:
+- Click **CF↓** to download Clash configuration
+- Or click **Sub CF🔗** to copy subscription link
+
+## 9. Common APIs
+
+### 9.1 Admin API
+
+```bash
+# Login to get Session Token
+curl -X POST http://localhost:8080/api/admin/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"changeme"}'
+
+# List nodes
+curl http://localhost:8080/api/admin/nodes \
+  -H 'Authorization: Bearer <session-token>'
+
+# List members
+curl http://localhost:8080/api/admin/members \
+  -H 'Authorization: Bearer <session-token>'
+
+# Create grant
+curl -X POST http://localhost:8080/api/admin/grants \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <session-token>' \
+  -d '{"member_id":"<member-id>","node_id":"<node-id>"}'
+```
+
+### 9.2 Node Agent API
+
+```bash
+# Heartbeat
+curl -X POST http://localhost:8080/api/agent/heartbeat \
+  -H 'Authorization: Bearer <node-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"applied_config_version":1,"public_host":"1.2.3.4"}'
+
+# Report traffic usage
+curl -X POST http://localhost:8080/api/agent/usage \
+  -H 'Authorization: Bearer <node-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"snapshots":[{"credential_uuid":"xxx","uplink":1234,"downlink":5678}]}'
+```
+
+## 10. Troubleshooting
+
+### 10.1 Node Cannot Connect
+
+1. Check if node status is **online**
+2. Check server firewall ports
+3. View node-agent logs:
+   ```bash
+   journalctl -u v2ray-platform-node-agent -f
+   ```
+
+### 10.2 Traffic Statistics Not Showing
+
+1. Confirm `NODE_USAGE_SOURCE=runtime`
+2. Confirm V2Ray stats API is enabled (port 10085)
+3. Manually test stats command:
+   ```bash
+   /usr/local/v2ray/v2ray api stats --server=127.0.0.1:10085 -json
+   ```
+
+### 10.3 Configuration Sync Failed
+
+1. Check specific error in **Logs & Alerts**
+2. Check node network connection
+3. Try manual configuration rebuild
+
+### 10.4 Database Connection Issues
+
+```bash
+# Test database connection
+psql $DATABASE_URL -c "SELECT 1"
+
+# Check connection pool status
+curl http://localhost:8080/api/admin/debug/health
+```
+
+## 11. Maintenance Operations
+
+### 11.1 Backup Database
+
+```bash
+# Neon users
+# Use Backup feature in Neon console
+
+# Self-hosted PostgreSQL
+pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql
+```
+
+### 11.2 Update Node Agent
+
+Node Agent supports auto-update:
+1. Push new version to GitHub Releases
+2. Agent automatically detects and updates on next heartbeat
+3. Automatically restarts after update
+
+### 11.3 Update Control Plane
+
+```bash
+# Publish a new control-plane image
+git push origin main
+
+# Or restart your own control-plane runtime after updating the code/image
+```
+
+## 12. Environment Variables Reference
+
+### Control Plane
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | - | PostgreSQL connection string |
+| `BOOTSTRAP_ADMIN_EMAIL` | - | Admin email created on first startup |
+| `BOOTSTRAP_ADMIN_PASSWORD` | - | Admin password created on first startup |
+| `CONTROL_PLANE_SESSION_SECRET` | Auto-generated | Session signing secret |
+| `PORT` | 8080 | Listen port |
+| `CONTROL_PLANE_NODE_OFFLINE_SECONDS` | 900 | Node offline threshold (seconds) |
+
+### Node Agent
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONTROL_PLANE_URL` | - | Control plane URL |
+| `BOOTSTRAP_TOKEN` | - | Bootstrap token for first run |
+| `NODE_NAME` | - | Node name |
+| `NODE_REGION` | - | Node region |
+| `NODE_PUBLIC_HOST` | - | Node public address |
+| `NODE_USAGE_SOURCE` | disabled | Traffic stats source (runtime/file) |
+| `NODE_USAGE_QUERY_SERVER` | 127.0.0.1:10085 | V2Ray stats API address |
