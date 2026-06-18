@@ -52,11 +52,18 @@ Read exactly one reference file:
 - Prefer `deploy/preflight-auto.sh` and `deploy/deploy-auto.sh` over ad hoc shell.
 - Do not switch the default path back to remote `docker build` unless GHCR is unavailable.
 - Verify with the real target URL after deploy. At minimum, check `/healthz`.
+- Treat remote health and public entry checks as separate verification layers:
+  `127.0.0.1` or container-local `/healthz` proves the service is running, but
+  public `http://` and `https://` checks prove whether the outside entrypoint is
+  actually usable.
 - If the deployment depends on secrets or env files that are not present, stop and report the missing inputs clearly.
 - If the repo docs and scripts disagree, fix that drift before claiming deployment is ready.
 - For SSH deploys, prefer the built-in behavior that can auto-generate missing
   bootstrap secrets and write the effective values to a server-side deploy info
   file for the user to inspect.
+- For node reinstall or cleanup tasks, remember that the real node-agent state
+  path is `/var/lib/v2ray-platform/agent-state.json`; removing only binaries or
+  unit files may still leave an old registration token behind.
 
 ## Output expectations
 
