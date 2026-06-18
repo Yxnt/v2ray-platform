@@ -24,5 +24,6 @@ tags: [nil-safety, dependency-injection, error-handling]
 - 当依赖有默认值（如 fallback 策略），用 option pattern 而非 nil 检查
 
 ## 上下文链接
-- 基于：[[knowledge/cloudfront-subscription-implementation-map/content]]
+- 基于：[[knowledge/control-plane-global-settings-pattern/content]]
+- 相关：[[knowledge/taste-review/content]]
 - 相关：[[maxims/preserve-user-visible-behavior-as-a-hard-rule]]

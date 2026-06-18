@@ -40,10 +40,11 @@ Admin UI
 | Layer | File | What |
 |-------|------|------|
 | Domain | `internal/domain/types.go` | `CloudFrontConfig`, `CloudFrontOrigin`, `CloudFrontBinding`, `CloudFrontSyncAction`; `Node.RouteKey` |
-| Store DTO | `internal/store/store.go` | `SaveCloudFrontConfigInput`, `UpdateCloudFrontSyncInput`; 7 Store interface methods |
+| Store DTO | `internal/store/store.go` | `SaveCloudFrontConfigInput`, `UpdateCloudFrontSyncInput` and related CloudFront store methods |
 | Store PG | `internal/store/postgres.go` | `INSERT ... ON CONFLICT` upsert; conditional `COALESCE(NULLIF(...))` for sync fields |
 | Store Mem | `internal/store/memory.go` | In-memory mirror with `sync.RWMutex` |
 | Migration | `migrations/0012_cloudfront_route_keys_and_config.sql` | `route_key` column + `cloudfront_configs` singleton table |
+| Related pattern | `knowledge/control-plane-global-settings-pattern/content.md` | Control-plane singleton config pattern reused by CloudFront and later platform settings |
 | Crypto | `internal/crypto/secrets.go` | `SecretCodec` — AES-256-GCM, base64 encoding, empty-string passthrough |
 | Config | `internal/config/config.go` | `CloudFrontMasterKey` env var |
 | Client iface | `internal/cloudfront/client.go` | `Client` interface: `ListDistributions`, `GetDistribution`, `ApplyDistributionRoutes`; `AWSClient` also supports `CreateDistribution` |
@@ -61,6 +62,7 @@ Admin UI
 - **Singleton config**: `cloudfront_configs` has exactly one row with `id = 'cf-global'`
 - **Encrypted credentials**: `EncryptedAccessKeyID`, `EncryptedSecretAccessKey`, `EncryptedSessionToken` — AES-256-GCM, never returned to UI after save
 - **Credential masking**: GET endpoint decrypts AccessKeyID, shows last 4 chars only
+- **Global settings authority**: CloudFront follows the control-plane singleton settings pattern instead of hiding platform-wide defaults in node/member models or install-script constants
 - **Route key**: `randomToken(8)` → 16-char hex, generated at node registration, immutable
 - **Routing model**: CloudFront cache behavior selects origin by `/{route_key}`; the managed CloudFront Function `v2ray-platform-route-rewrite` rewrites the URI to the node's direct websocket path `/{node.name}` before origin fetch
 - **Live AWS state authority**: plan/sync fetch the live distribution every time; stored `origins_json` is scan cache only
@@ -89,4 +91,5 @@ All API request/response fields use **camelCase** (Go JSON tags). The admin UI m
 ## 上下文链接
 - 基于：[[knowledge/taste-review/content]]
 - 导致：[[decisions/2026-06-05-keep-dual-subscription-exports-for-node-access-modes]]
+- 相关：[[knowledge/control-plane-global-settings-pattern/content]]
 - 相关：[[decisions/2026-06-05-use-stable-route-keys-for-cloudfront-node-routing]]
