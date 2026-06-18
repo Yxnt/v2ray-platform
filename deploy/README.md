@@ -1,145 +1,60 @@
-# Deployment guide
+# Packaging and bootstrap guide
 
-## Recommended lean hosted setup
+This repository keeps two distributable artifacts current:
 
-For the smallest operational footprint, use:
+- a `control-plane` container image published to GitHub Container Registry
+- `node-agent` binaries published to GitHub Releases
 
-- **Google Cloud Run** for the `control-plane`
-- **Neon** for PostgreSQL
+## Control-plane image
 
-Why this is the best fit:
+Build locally:
 
-- Cloud Run can scale to zero, so an infrequently used admin panel does not need an always-on VM.
-- Neon has a free PostgreSQL tier and scales compute down when idle.
-- You do not need to keep an extra management server running yourself.
+```sh
+docker build -t v2ray-platform-control-plane .
+```
 
-## Free-tier reality check
+Publish automatically:
 
-“Free forever” app hosting is unstable across vendors, so the practical answer is:
+- Push to `main`
+- GitHub Actions workflow `.github/workflows/deploy.yml` builds and pushes:
 
-- **Best current low-ops option:** Cloud Run + Neon
-- **Not ideal for true free-only expectations:** Railway, Fly.io, Koyeb
+```text
+ghcr.io/<your-github-owner>/v2ray-platform-control-plane
+```
 
-Current caveats:
+Published tags:
 
-- **Cloud Run** has a free tier, but usually requires enabling billing on a Google Cloud account.
-- **Neon** has a free PostgreSQL tier.
-- **Railway** is no longer truly free long term; after the trial, pricing starts at `$1/month` on the free plan page.
-- **Fly.io** is usage billed and requires a card on file.
-- **Koyeb** pricing currently emphasizes paid usage and serverless billing; it is not the safest assumption for a stable free control plane.
+- `latest`
+- `${GITHUB_SHA}`
 
-If you want the most realistic “almost free” production-like path, choose **Cloud Run + Neon**.
+No extra registry secret is required because the workflow uses the built-in
+`GITHUB_TOKEN`.
 
-## What gets deployed
-
-This repository ships a container image for the `control-plane`.
-
-Environment variables:
+Useful runtime variables for the control plane:
 
 - `DATABASE_URL`
 - `PORT` or `CONTROL_PLANE_LISTEN_ADDR`
 - `BOOTSTRAP_ADMIN_EMAIL`
 - `BOOTSTRAP_ADMIN_PASSWORD`
 - `CONTROL_PLANE_SESSION_SECRET`
-- `CONTROL_PLANE_ADMIN_TOKEN` for optional legacy fallback only
-- `CONTROL_PLANE_ALERT_WEBHOOK_URL` for webhook alert delivery
+- `CONTROL_PLANE_ADMIN_TOKEN`
+- `CONTROL_PLANE_ALERT_WEBHOOK_URL`
 - `CONTROL_PLANE_DB_MAX_OPEN_CONNS`
 - `CONTROL_PLANE_DB_MAX_IDLE_CONNS`
 - `CONTROL_PLANE_DB_CONN_MAX_LIFETIME_SECONDS`
-- `AGENT_DOWNLOAD_URL` override the node-agent binary download URL (default: GitHub Releases latest)
+- `AGENT_DOWNLOAD_URL`
 
-The app automatically:
+## Node-agent release artifacts
 
-- listens on `:$PORT` when `PORT` is provided
-- falls back to `:8080` locally
-- uses PostgreSQL when `DATABASE_URL` is set
-- runs embedded SQL migrations automatically on startup
-- falls back to in-memory mode for local development
-- records audit logs for core admin actions
-- evaluates node/quota alerts and can deliver them by webhook
-- runs lifecycle enforcement sweeps for expiry and quota policies
+Pushes to `main` and semver tags trigger `.github/workflows/release.yml`, which
+builds:
 
-## Build the container locally
+- `node-agent-linux-amd64`
+- `node-agent-linux-arm64`
+- matching `.md5` files
 
-```sh
-docker build -t v2ray-platform-control-plane .
-```
-
-## Deploy to Cloud Run
-
-There are two ways to deploy: **automatic via GitHub Actions** or **manual via script**.
-
-### Option A — GitHub Actions (recommended)
-
-Push to `main` and the workflow in `.github/workflows/deploy.yml` will:
-1. Build and push the Docker image to **GitHub Container Registry** (`ghcr.io`).
-2. Deploy the new image to Cloud Run.
-
-**One-time GitHub setup** (Settings → Secrets and variables):
-
-| Secret | Value |
-|--------|-------|
-| `GCP_SA_KEY` | JSON key of a GCP service account (see below) |
-| `DATABASE_URL` | Neon or Cloud SQL connection string |
-| `BOOTSTRAP_ADMIN_EMAIL` | First admin email |
-| `BOOTSTRAP_ADMIN_PASSWORD` | First admin password (rotate after first login) |
-| `CONTROL_PLANE_SESSION_SECRET` | Random 32+ char string (`openssl rand -hex 32`) |
-| `CONTROL_PLANE_ALERT_WEBHOOK_URL` | _(optional)_ webhook for alerts |
-
-**Repository variables** (Settings → Variables — not secrets):
-
-| Variable | Default | Override example |
-|----------|---------|-----------------|
-| `GCP_REGION` | `asia-east1` | `us-central1` |
-| `CLOUDRUN_SERVICE` | `v2ray-platform` | `my-cp` |
-
-**GCP service account minimum roles:**
-```sh
-gcloud projects add-iam-policy-binding YOUR_PROJECT \
-  --member="serviceAccount:YOUR_SA@YOUR_PROJECT.iam.gserviceaccount.com" \
-  --role="roles/run.admin"
-gcloud projects add-iam-policy-binding YOUR_PROJECT \
-  --member="serviceAccount:YOUR_SA@YOUR_PROJECT.iam.gserviceaccount.com" \
-  --role="roles/iam.serviceAccountUser"
-```
-
-Cloud Run needs permission to pull from `ghcr.io`. Either make the package public
-(recommended for this project) in your GitHub Package settings, or configure
-[authenticated pulls](https://cloud.google.com/run/docs/deploying#other-registries).
-
-### Option B — one-shot local script
-
-```sh
-export GCP_PROJECT=your-project-id
-export DATABASE_URL='postgres://user:pass@host/db?sslmode=require'
-export BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-export BOOTSTRAP_ADMIN_PASSWORD=changeme
-export CONTROL_PLANE_SESSION_SECRET=$(openssl rand -hex 32)
-
-# optional overrides
-export GCP_REGION=asia-east1
-export CLOUDRUN_SERVICE=v2ray-platform
-
-bash deploy/deploy-cloudrun.sh
-```
-
-The script will:
-1. Create an Artifact Registry repository if needed.
-2. Build the Docker image and push it tagged with the current git SHA + `latest`.
-3. Deploy to Cloud Run with all required env vars.
-4. Print the service URL when done.
-
-
-## First login and usage
-
-After deploy:
-
-1. Open the Cloud Run URL.
-2. Log in with `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`.
-3. In the **Nodes** tab, click **＋ Add Node**, fill in the form, and copy the generated one-liner to bootstrap each node.
-4. Manage members, grants, revocations, and audit logs in the built-in UI.
-5. Review node/member usage summaries in the same UI after agents upload snapshots.
-6. Use node/member search filters and batch actions directly in the built-in UI.
+These artifacts are attached to GitHub Releases and are the default source used
+by the node bootstrap flow.
 
 ## Node bootstrap
 
@@ -207,7 +122,7 @@ NODE_USAGE_QUERY_COMMAND='xray api statsquery --server=127.0.0.1:10085'
 
 The older file-based bridge is still available with `NODE_USAGE_SOURCE=file` plus `NODE_USAGE_INPUT_PATH`.
 
-## Local PostgreSQL smoke test
+## Local smoke test
 
 If you already have a local PostgreSQL image, you can validate the full flow with:
 
@@ -226,37 +141,3 @@ If `55432` is already in use locally, also override the port:
 ```sh
 POSTGRES_IMAGE=docker.ispider.io/postgres:latest POSTGRES_PORT=55434 SMOKE_PORT=18084 ./deploy/smoke-postgres.sh
 ```
-
-## Future deployment backlog
-
-These items are intentionally documented here for later production hardening rather than implemented now.
-
-### 1. Safer public exposure
-
-- put Cloud Run behind a custom domain and managed TLS
-- optionally front it with Cloud Armor, reverse proxy rules, or identity-aware access
-- remove reliance on the legacy admin token in internet-facing environments
-
-### 2. Secret handling
-
-- move bootstrap admin password and session secret to a managed secret store
-- document rotation procedure and recovery procedure
-- avoid keeping bootstrap credentials permanently in the deployed service config
-
-### 3. Database operations
-
-- add backup schedule guidance for Neon or external PostgreSQL
-- document restore drill steps
-- document retention strategy for usage snapshots and audit logs if data size grows
-
-### 4. Monitoring
-
-- add a real metrics sink for control-plane request rates and failures
-- add alert rules for startup failures, migration failures, and prolonged node offline state
-- document how to inspect node-agent logs separately from control-plane logs
-
-### 5. Scaling considerations
-
-- review SQL pool sizing against Neon connection limits
-- add multi-instance migration strategy if the service stops being single-instance
-- decide when PgBouncer or another pooler becomes necessary
