@@ -1,5 +1,22 @@
 # Packaging and bootstrap guide
 
+## Recommended deployment path
+
+For this repository's default production path, use:
+
+- **A normal Linux server reachable over SSH** for the `control-plane`
+- **The published image `ghcr.io/yxnt/v2ray-platform-control-plane:latest`**
+- **Bundled Postgres in Docker Compose** or an external PostgreSQL DSN if you already have one
+
+Why this is the default:
+
+- Another LLM can deploy end-to-end with only SSH and Docker Compose.
+- The same artifact can be reused across servers without rebuilding on the target host.
+- The deploy script can optionally restore a PostgreSQL dump during first bring-up.
+
+Cloud Run remains supported as an optional path, but it is no longer the
+default assumption for automation agents.
+
 This repository keeps two distributable artifacts current:
 
 - a `control-plane` container image published to GitHub Container Registry
@@ -25,7 +42,7 @@ ghcr.io/<your-github-owner>/v2ray-platform-control-plane
 Published tags:
 
 - `latest`
-- `${GITHUB_SHA}`
+- `sha-<shortsha>`
 
 No extra registry secret is required because the workflow uses the built-in
 `GITHUB_TOKEN`.
@@ -55,6 +72,138 @@ builds:
 
 These artifacts are attached to GitHub Releases and are the default source used
 by the node bootstrap flow.
+
+## Deploy to a normal Linux server over SSH
+
+The canonical handoff for other LLMs or automation agents is documented in
+[`docs/llm-deploy-handoff.md`](../docs/llm-deploy-handoff.md). Treat that file,
+`deploy/deploy-auto.sh`, and `deploy/server.env.example` as the default
+deployment surface.
+
+Start from the env template:
+
+```sh
+cp deploy/server.env.example /tmp/v2ray-platform-server.env
+# edit the copied file with real values
+. /tmp/v2ray-platform-server.env
+```
+
+Then run:
+
+```sh
+bash deploy/preflight-auto.sh
+bash deploy/deploy-auto.sh
+```
+
+Equivalent `make` entrypoints:
+
+```sh
+make deploy-preflight
+make deploy
+```
+
+The server deploy script will:
+1. Validate local env vars, tools, and SSH connectivity.
+2. Validate that the remote host has `docker` and `docker compose`.
+3. Upload the repository and a generated `.env.server` file to the remote host.
+4. Restore `POSTGRES_RESTORE_DUMP` into the bundled Postgres container when provided.
+5. Pull `CONTROL_PLANE_IMAGE` from GHCR and start the control-plane container.
+6. Verify `GET /healthz` on `CONTROL_PLANE_PUBLIC_URL`.
+
+## Deploy to Cloud Run
+
+There are two ways to deploy: **automatic via GitHub Actions** or **manual via script**.
+
+For a ready-to-fill env template, start from
+[`deploy/cloudrun.env.example`](./cloudrun.env.example).
+
+### Option A — GitHub Actions (recommended)
+
+Push to `main` and the workflow in `.github/workflows/deploy.yml` will:
+1. Authenticate to Google Cloud with `GCP_SA_KEY`.
+2. Validate the required repository secrets and variables.
+3. Run `bash deploy/deploy-cloudrun.sh`.
+4. Build, push, and deploy the control-plane image to Cloud Run.
+
+**One-time GitHub setup** (Settings → Secrets and variables):
+
+| Secret | Value |
+|--------|-------|
+| `GCP_SA_KEY` | JSON key of a GCP service account (see below) |
+| `DATABASE_URL` | Neon or Cloud SQL connection string |
+| `BOOTSTRAP_ADMIN_EMAIL` | First admin email |
+| `BOOTSTRAP_ADMIN_PASSWORD` | First admin password (rotate after first login) |
+| `CONTROL_PLANE_SESSION_SECRET` | Random 32+ char string (`openssl rand -hex 32`) |
+| `CONTROL_PLANE_ALERT_WEBHOOK_URL` | _(optional)_ webhook for alerts |
+
+**Repository variables** (Settings → Variables — not secrets):
+
+| Variable | Default | Override example |
+|----------|---------|-----------------|
+| `GCP_PROJECT` | none | `my-gcp-project` |
+| `GCP_REGION` | `asia-east1` | `us-central1` |
+| `CLOUDRUN_SERVICE` | `v2ray-platform` | `my-cp` |
+| `IMAGE` | derived by script | `us-central1-docker.pkg.dev/my-gcp-project/v2ray-platform/control-plane` |
+
+**GCP service account minimum roles:**
+```sh
+gcloud projects add-iam-policy-binding YOUR_PROJECT \
+  --member="serviceAccount:YOUR_SA@YOUR_PROJECT.iam.gserviceaccount.com" \
+  --role="roles/run.admin"
+gcloud projects add-iam-policy-binding YOUR_PROJECT \
+  --member="serviceAccount:YOUR_SA@YOUR_PROJECT.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+By default the deploy script uses Artifact Registry in the same GCP project and
+region. If you override `IMAGE`, make sure the target registry is reachable from
+Cloud Run and that your deploy identity can push to it.
+
+### Option B — one-shot local script
+
+```sh
+cp deploy/cloudrun.env.example /tmp/v2ray-platform-cloudrun.env
+# edit the copied file with real values
+. /tmp/v2ray-platform-cloudrun.env
+
+export GCP_PROJECT=your-project-id
+export DATABASE_URL='postgres://user:pass@host/db?sslmode=require'
+export BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+export BOOTSTRAP_ADMIN_PASSWORD=changeme
+export CONTROL_PLANE_SESSION_SECRET=$(openssl rand -hex 32)
+
+# optional overrides
+export GCP_REGION=asia-east1
+export CLOUDRUN_SERVICE=v2ray-platform
+
+bash deploy/preflight-auto.sh
+bash deploy/deploy-auto.sh
+```
+
+Equivalent `make` entrypoints:
+
+```sh
+make deploy-preflight
+make deploy
+```
+
+The script will:
+1. Create an Artifact Registry repository if needed.
+2. Build the Docker image and push it tagged with the current git SHA + `latest`.
+3. Deploy to Cloud Run with all required env vars.
+4. Verify `GET /healthz` on the deployed service.
+5. Print the service URL when done.
+
+## First login and usage
+
+After deploy:
+
+1. Open the control-plane URL.
+2. Log in with `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`.
+3. In the **Nodes** tab, click **＋ Add Node**, fill in the form, and copy the generated one-liner to bootstrap each node.
+4. Manage members, grants, revocations, and audit logs in the built-in UI.
+5. Review node/member usage summaries in the same UI after agents upload snapshots.
+6. Use node/member search filters and batch actions directly in the built-in UI.
 
 ## Node bootstrap
 

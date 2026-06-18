@@ -2,7 +2,7 @@
 
 ## 1. 系统架构概览
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Control Plane                            │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
@@ -42,7 +42,48 @@ go run ./cmd/control-plane
 
 访问 http://localhost:8080 打开管理界面。
 
-### 2.2 Docker 本地构建
+### 2.2 生产环境部署（默认：SSH 服务器 + GHCR）
+
+#### 第一步：准备可 SSH 连接的 Linux 服务器
+
+1. 确认目标主机可以通过 SSH 访问
+2. 确认目标主机已安装 `docker` 和 `docker compose`
+3. 决定使用内置 Postgres 容器，还是自己提供外部 `DATABASE_URL`
+
+#### 第二步：加载服务端部署环境变量
+
+```bash
+cp deploy/server.env.example /tmp/v2ray-platform-server.env
+# edit the copied file with real values
+. /tmp/v2ray-platform-server.env
+```
+
+关键变量：
+
+- `DEPLOY_HOST`
+- `DEPLOY_PATH`
+- `CONTROL_PLANE_PUBLIC_URL`
+- `CONTROL_PLANE_IMAGE`，默认值：`ghcr.io/yxnt/v2ray-platform-control-plane:latest`
+- `POSTGRES_RESTORE_DUMP`，可选，用于首次部署时恢复数据库备份
+
+#### 第三步：执行预检和部署
+
+```bash
+bash deploy/preflight-auto.sh
+bash deploy/deploy-auto.sh
+```
+
+脚本会自动上传仓库、生成 `.env.server`、按需恢复 Postgres 备份、从
+GHCR 拉取镜像，并启动 control-plane 容器。
+
+#### 可选：Cloud Run 部署
+
+```bash
+bash deploy/preflight-cloudrun.sh
+bash deploy/deploy-cloudrun.sh
+```
+
+### 2.3 Docker 本地构建
 
 ```bash
 docker build -t v2ray-platform-control-plane .
@@ -52,7 +93,7 @@ docker run -p 8080:8080 \
   v2ray-platform-control-plane
 ```
 
-### 2.3 已发布镜像
+### 2.4 已发布镜像
 
 推送到 `main` 后，`.github/workflows/deploy.yml` 会把 control-plane 镜像
 发布到：
@@ -65,7 +106,7 @@ ghcr.io/<your-github-owner>/v2ray-platform-control-plane
 
 ### 3.1 登录管理界面
 
-1. 打开部署后的 URL (如 `https://v2ray-platform-xxxxxx.run.app`)
+1. 打开部署后的 URL（例如 `https://control-plane.example.com`）
 2. 使用 `BOOTSTRAP_ADMIN_EMAIL` 和 `BOOTSTRAP_ADMIN_PASSWORD` 登录
 3. **重要**：首次登录后立即修改密码
 

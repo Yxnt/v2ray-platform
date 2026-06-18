@@ -2,7 +2,7 @@
 
 ## 1. System Architecture Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Control Plane                            │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
@@ -42,7 +42,48 @@ go run ./cmd/control-plane
 
 Open http://localhost:8080 to access the admin UI.
 
-### 2.2 Docker Local Build
+### 2.2 Production Deployment (Default: SSH Server + GHCR)
+
+#### Step 1: Prepare a Linux server with Docker Compose
+
+1. Ensure the target host is reachable over SSH
+2. Ensure `docker` and `docker compose` are installed on the target host
+3. Decide whether to use the bundled Postgres container or an external `DATABASE_URL`
+
+#### Step 2: Load the server deploy environment
+
+```bash
+cp deploy/server.env.example /tmp/v2ray-platform-server.env
+# edit the copied file with real values
+. /tmp/v2ray-platform-server.env
+```
+
+Important variables:
+
+- `DEPLOY_HOST`
+- `DEPLOY_PATH`
+- `CONTROL_PLANE_PUBLIC_URL`
+- `CONTROL_PLANE_IMAGE` default: `ghcr.io/yxnt/v2ray-platform-control-plane:latest`
+- `POSTGRES_RESTORE_DUMP` optional local dump path to restore on first deploy
+
+#### Step 3: Run preflight and deploy
+
+```bash
+bash deploy/preflight-auto.sh
+bash deploy/deploy-auto.sh
+```
+
+The deploy script uploads the repo, writes `.env.server`, restores the optional
+Postgres dump, pulls the GHCR image, and starts the control-plane container.
+
+#### Optional: Cloud Run deployment
+
+```bash
+bash deploy/preflight-cloudrun.sh
+bash deploy/deploy-cloudrun.sh
+```
+
+### 2.3 Docker Local Build
 
 ```bash
 docker build -t v2ray-platform-control-plane .
@@ -52,7 +93,7 @@ docker run -p 8080:8080 \
   v2ray-platform-control-plane
 ```
 
-### 2.3 Published image
+### 2.4 Published image
 
 Push to `main` and `.github/workflows/deploy.yml` publishes the control-plane
 image to:
@@ -65,7 +106,7 @@ ghcr.io/<your-github-owner>/v2ray-platform-control-plane
 
 ### 3.1 Login to Admin UI
 
-1. Open the deployed URL (e.g., `https://v2ray-platform-xxxxxx.run.app`)
+1. Open the deployed URL (for example `https://control-plane.example.com`)
 2. Login with `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD`
 3. **Important**: Change password immediately after first login
 

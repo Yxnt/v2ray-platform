@@ -17,7 +17,7 @@ Independent control plane and node agent for managing V2Ray proxy nodes.
 
 ## Repository layout
 
-```
+```text
 cmd/
   control-plane/
   node-agent/
@@ -52,6 +52,17 @@ go run ./cmd/control-plane
 Open `http://localhost:8080` to access the admin UI. Create a bootstrap token from the UI,
 then run the generated install script on each proxy server to register a node.
 
+## Deployment default
+
+The default production path is:
+
+- publish `ghcr.io/yxnt/v2ray-platform-control-plane`
+- deploy to a normal Linux server with `bash deploy/deploy-auto.sh`
+- bootstrap proxy nodes from the admin UI with `GET /install.sh`
+
+Cloud Run remains supported, but another LLM should not assume GCP unless the
+user explicitly asks for it.
+
 ## Documentation
 
 | Doc | Description |
@@ -60,7 +71,9 @@ then run the generated install script on each proxy server to register a node.
 | [docs/node-agent.md](docs/node-agent.md) | Node agent setup, usage stats, auto-update, troubleshooting |
 | [docs/subscription.md](docs/subscription.md) | Clash subscription, tiers, quota, proxy chain |
 | [docs/roadmap.md](docs/roadmap.md) | Planned features |
-| [deploy/README.md](deploy/README.md) | Packaging and bootstrap guide |
+| [deploy/README.md](deploy/README.md) | Deployment guide |
+| [docs/llm-deploy-handoff.md](docs/llm-deploy-handoff.md) | LLM-facing deployment handoff and CI contract |
+| [deploy/server.env.example](deploy/server.env.example) | SSH server deploy env template |
 
 ## Acknowledgements
 
