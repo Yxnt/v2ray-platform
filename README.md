@@ -63,6 +63,51 @@ The default production path is:
 Cloud Run remains supported, but another LLM should not assume GCP unless the
 user explicitly asks for it.
 
+## Codex skill
+
+This repository ships a deploy skill for Codex users at
+[`skills/deploy-v2ray-platform/`](skills/deploy-v2ray-platform/).
+
+### Install the skill
+
+Copy the skill into your local Codex skills directory:
+
+```sh
+mkdir -p ~/.codex/skills
+cp -R skills/deploy-v2ray-platform ~/.codex/skills/
+```
+
+After that, Codex can discover the skill by name: `deploy-v2ray-platform`.
+
+### Use the skill
+
+Ask Codex to deploy this project with prompts like:
+
+- `Use deploy-v2ray-platform to deploy this project to my Linux server`
+- `Use deploy-v2ray-platform and walk me through the SSH deploy`
+- `Use deploy-v2ray-platform to deploy this to Cloud Run`
+
+Expected behavior:
+
+- default path: publish or reuse the GHCR image, then deploy over SSH with `deploy/preflight-auto.sh` and `deploy/deploy-auto.sh`
+- Cloud Run path: used only when you explicitly ask for `Cloud Run`, `GCP`, or `gcloud`
+- verification: the skill expects a real `/healthz` check on the final service URL
+
+### What gets auto-generated
+
+For the SSH server path, you can omit several bootstrap values and let the
+deploy flow generate them for you:
+
+- `BOOTSTRAP_ADMIN_PASSWORD`
+- `CONTROL_PLANE_SESSION_SECRET`
+- `CONTROL_PLANE_ADMIN_TOKEN`
+- `POSTGRES_PASSWORD` when `DATABASE_URL` is not set
+- `CONTROL_PLANE_PUBLIC_URL` when it can be derived from `DEPLOY_HOST`
+
+The effective values are written to a server-side file at
+`/opt/v2ray-platform/deploy-info.txt` by default, so the user can review them
+directly on the target host after deploy.
+
 ## Documentation
 
 | Doc | Description |
@@ -74,6 +119,7 @@ user explicitly asks for it.
 | [deploy/README.md](deploy/README.md) | Deployment guide |
 | [docs/llm-deploy-handoff.md](docs/llm-deploy-handoff.md) | LLM-facing deployment handoff and CI contract |
 | [deploy/server.env.example](deploy/server.env.example) | SSH server deploy env template |
+| [skills/deploy-v2ray-platform/SKILL.md](skills/deploy-v2ray-platform/SKILL.md) | Codex deploy skill for this repository |
 
 ## Acknowledgements
 
