@@ -799,9 +799,23 @@
   <!-- ════════════════ SETTINGS ════════════════ -->
   <section class="tab-content" id="tab-settings">
     <div class="section-hd">
-      <div><h2>Settings</h2><p>Session and authentication management</p></div>
+      <div><h2>Settings</h2><p>Session management and platform defaults</p></div>
     </div>
-    <div style="max-width:480px">
+    <div style="max-width:560px;display:grid;gap:16px">
+      <div class="card">
+        <div class="card-title">Traffic usage collection</div>
+        <p style="font-size:13px;color:var(--text-dim);margin:0 0 16px">
+          Disabled by default. New node install commands will include usage collection only after you turn this on.
+        </p>
+        <label style="display:inline-flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer">
+          <input id="settings-usage-collection-enabled" type="checkbox">
+          <span>Enable usage collection for newly generated node install commands</span>
+        </label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" id="settings-save-platform-btn">Save platform settings</button>
+          <span id="settings-platform-note" style="font-size:12px;color:var(--text-muted)"></span>
+        </div>
+      </div>
       <div class="card">
         <div class="card-title">Current session</div>
         <p style="font-size:13px;color:var(--text-dim);margin:0 0 16px" id="settings-session-note">
@@ -919,6 +933,9 @@
       nodeUsageBody: document.querySelector('#node-usage-body'),
       memberUsageBody: document.querySelector('#member-usage-body'),
       tiersBody: document.querySelector('#tiers-body'),
+      settingsUsageCollectionEnabled: document.querySelector('#settings-usage-collection-enabled'),
+      settingsSavePlatformBtn: document.querySelector('#settings-save-platform-btn'),
+      settingsPlatformNote: document.querySelector('#settings-platform-note'),
       grantNode: document.querySelector('#grant-node'),
       grantMember: document.querySelector('#grant-member'),
       groupGrantGroup: document.querySelector('#group-grant-group'),
@@ -929,6 +946,7 @@
     let refreshTimer = 0;
     let cloudFrontDistributions = [];
     let cloudFrontReady = false;
+    let platformSettingsReady = false;
 
     function escapeHtml(value) {
       return String(value ?? '')
@@ -1260,7 +1278,23 @@
       document.querySelectorAll('[data-select-all]').forEach(input => { input.checked = false; });
 
       // Load CloudFront status
+      await loadPlatformSettings();
       await loadCloudFrontConfig();
+    }
+
+    async function loadPlatformSettings() {
+      try {
+        const settings = await api('/api/admin/settings/platform');
+        els.settingsUsageCollectionEnabled.checked = !!settings.usageCollectionEnabled;
+        els.settingsPlatformNote.textContent = settings.usageCollectionEnabled
+          ? 'New install commands will enable runtime usage collection.'
+          : 'New install commands will keep usage collection disabled.';
+        platformSettingsReady = true;
+      } catch (error) {
+        platformSettingsReady = false;
+        els.settingsUsageCollectionEnabled.checked = false;
+        els.settingsPlatformNote.textContent = `Unable to load platform settings: ${error.message}`;
+      }
     }
 
     async function updateMember(memberID, patch) {
@@ -1317,6 +1351,26 @@
         document.querySelector('#login-overlay').classList.remove('hidden');
       } catch (error) {
         alert(error.message);
+      }
+    });
+
+    els.settingsSavePlatformBtn.addEventListener('click', async () => {
+      try {
+        const enabled = !!els.settingsUsageCollectionEnabled.checked;
+        await api('/api/admin/settings/platform', {
+          method: 'POST',
+          body: JSON.stringify({
+            usageCollectionEnabled: enabled,
+          }),
+        });
+        platformSettingsReady = true;
+        els.settingsPlatformNote.textContent = enabled
+          ? 'Saved. Newly generated install commands will enable usage collection.'
+          : 'Saved. Newly generated install commands will keep usage collection disabled.';
+        toast('Platform settings saved', 'success');
+      } catch (error) {
+        els.settingsPlatformNote.textContent = `Save failed: ${error.message}`;
+        toast(error.message, 'error');
       }
     });
 

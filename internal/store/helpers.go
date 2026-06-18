@@ -98,6 +98,11 @@ func cloneCloudFrontConfig(cfg *domain.CloudFrontConfig) *domain.CloudFrontConfi
 	return &copied
 }
 
+func clonePlatformSettings(settings *domain.PlatformSettings) *domain.PlatformSettings {
+	copied := *settings
+	return &copied
+}
+
 func cloneAdmin(admin *domain.Admin) *domain.Admin {
 	copied := *admin
 	return &copied

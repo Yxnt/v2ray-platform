@@ -106,6 +106,72 @@ func TestAdminWebUIIsServedWithoutCache(t *testing.T) {
 	}
 }
 
+func TestPlatformSettingsDefaultUsageCollectionDisabled(t *testing.T) {
+	st := store.NewMemoryStore()
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/settings/platform", nil)
+	req.Header.Set("X-Admin-Token", "admin-token")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		UsageCollectionEnabled bool `json:"usageCollectionEnabled"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.UsageCollectionEnabled {
+		t.Fatalf("expected usage collection disabled by default, got %+v", payload)
+	}
+}
+
+func TestInstallScriptUsesPlatformUsageCollectionSetting(t *testing.T) {
+	st := store.NewMemoryStore()
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, nil)
+
+	disabledReq := httptest.NewRequest(http.MethodGet, "/install.sh?token=test-token&name=node-1", nil)
+	disabledRec := httptest.NewRecorder()
+	router.ServeHTTP(disabledRec, disabledReq)
+
+	if disabledRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for default install script, got %d body=%s", disabledRec.Code, disabledRec.Body.String())
+	}
+	if !strings.Contains(disabledRec.Body.String(), `NODE_USAGE_SOURCE="disabled"`) {
+		t.Fatalf("expected default install script to disable usage collection, got %s", disabledRec.Body.String())
+	}
+
+	saveReq := httptest.NewRequest(http.MethodPost, "/api/admin/settings/platform", bytes.NewBufferString(`{
+		"usageCollectionEnabled": true
+	}`))
+	saveReq.Header.Set("X-Admin-Token", "admin-token")
+	saveReq.Header.Set("Content-Type", "application/json")
+	saveRec := httptest.NewRecorder()
+	router.ServeHTTP(saveRec, saveReq)
+
+	if saveRec.Code != http.StatusOK {
+		t.Fatalf("expected settings save 200, got %d body=%s", saveRec.Code, saveRec.Body.String())
+	}
+
+	enabledReq := httptest.NewRequest(http.MethodGet, "/install.sh?token=test-token&name=node-1", nil)
+	enabledRec := httptest.NewRecorder()
+	router.ServeHTTP(enabledRec, enabledReq)
+
+	if enabledRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for enabled install script, got %d body=%s", enabledRec.Code, enabledRec.Body.String())
+	}
+	if !strings.Contains(enabledRec.Body.String(), `NODE_USAGE_SOURCE="runtime"`) {
+		t.Fatalf("expected enabled install script to use runtime usage collection, got %s", enabledRec.Body.String())
+	}
+}
+
 func TestStatelessMemoryModeLogoutAllReturnsSuccess(t *testing.T) {
 	st := store.NewMemoryStore()
 	admin, err := st.EnsureAdmin("admin@example.com", "hash")
