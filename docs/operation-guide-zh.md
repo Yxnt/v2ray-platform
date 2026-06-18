@@ -27,7 +27,7 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## 2. 部署 Control Plane
+## 2. 运行 Control Plane
 
 ### 2.1 本地开发模式
 
@@ -42,44 +42,7 @@ go run ./cmd/control-plane
 
 访问 http://localhost:8080 打开管理界面。
 
-### 2.2 生产环境部署 (Cloud Run + Neon)
-
-#### 第一步：准备 Neon PostgreSQL
-
-1. 访问 [neon.tech](https://neon.tech) 创建免费账户
-2. 创建新项目，获取连接字符串
-3. 连接字符串格式：`postgres://user:pass@host/dbname?sslmode=require`
-
-#### 第二步：部署到 Cloud Run
-
-**方式 A：GitHub Actions (推荐)**
-
-1. Fork 项目到你的 GitHub 账户
-2. 在 Settings → Secrets and variables → Actions 中添加：
-
-| Secret 名称 | 值 |
-|------------|-----|
-| `GCP_SA_KEY` | GCP 服务账号 JSON 密钥 |
-| `DATABASE_URL` | Neon 连接字符串 |
-| `BOOTSTRAP_ADMIN_EMAIL` | 管理员邮箱 |
-| `BOOTSTRAP_ADMIN_PASSWORD` | 管理员密码 |
-| `CONTROL_PLANE_SESSION_SECRET` | 随机字符串 (生成: `openssl rand -hex 32`) |
-
-3. 推送到 main 分支，自动触发部署
-
-**方式 B：手动脚本部署**
-
-```bash
-export GCP_PROJECT=your-project-id
-export DATABASE_URL='postgres://user:pass@host/db?sslmode=require'
-export BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-export BOOTSTRAP_ADMIN_PASSWORD=changeme
-export CONTROL_PLANE_SESSION_SECRET=$(openssl rand -hex 32)
-
-bash deploy/deploy-cloudrun.sh
-```
-
-### 2.3 Docker 本地构建
+### 2.2 Docker 本地构建
 
 ```bash
 docker build -t v2ray-platform-control-plane .
@@ -87,6 +50,15 @@ docker run -p 8080:8080 \
   -e BOOTSTRAP_ADMIN_EMAIL=admin@example.com \
   -e BOOTSTRAP_ADMIN_PASSWORD=changeme \
   v2ray-platform-control-plane
+```
+
+### 2.3 已发布镜像
+
+推送到 `main` 后，`.github/workflows/deploy.yml` 会把 control-plane 镜像
+发布到：
+
+```text
+ghcr.io/<your-github-owner>/v2ray-platform-control-plane
 ```
 
 ## 3. 首次登录与基础配置
@@ -381,11 +353,10 @@ Node Agent 支持自动更新：
 ### 11.3 更新 Control Plane
 
 ```bash
-# GitHub Actions 方式
+# 发布新的 control-plane 镜像
 git push origin main
 
-# 手动方式
-bash deploy/deploy-cloudrun.sh
+# 或者在你自己的运行环境里更新代码/镜像后重启 control-plane
 ```
 
 ## 12. 环境变量参考

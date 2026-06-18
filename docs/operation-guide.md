@@ -27,7 +27,7 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## 2. Deploying Control Plane
+## 2. Running Control Plane
 
 ### 2.1 Local Development Mode
 
@@ -42,44 +42,7 @@ go run ./cmd/control-plane
 
 Open http://localhost:8080 to access the admin UI.
 
-### 2.2 Production Deployment (Cloud Run + Neon)
-
-#### Step 1: Set up Neon PostgreSQL
-
-1. Visit [neon.tech](https://neon.tech) and create a free account
-2. Create a new project and get the connection string
-3. Connection string format: `postgres://user:pass@host/dbname?sslmode=require`
-
-#### Step 2: Deploy to Cloud Run
-
-**Option A: GitHub Actions (Recommended)**
-
-1. Fork the project to your GitHub account
-2. Go to Settings → Secrets and variables → Actions and add:
-
-| Secret Name | Value |
-|------------|-------|
-| `GCP_SA_KEY` | GCP service account JSON key |
-| `DATABASE_URL` | Neon connection string |
-| `BOOTSTRAP_ADMIN_EMAIL` | Admin email |
-| `BOOTSTRAP_ADMIN_PASSWORD` | Admin password |
-| `CONTROL_PLANE_SESSION_SECRET` | Random string (generate: `openssl rand -hex 32`) |
-
-3. Push to main branch to trigger automatic deployment
-
-**Option B: Manual Script Deployment**
-
-```bash
-export GCP_PROJECT=your-project-id
-export DATABASE_URL='postgres://user:pass@host/db?sslmode=require'
-export BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-export BOOTSTRAP_ADMIN_PASSWORD=changeme
-export CONTROL_PLANE_SESSION_SECRET=$(openssl rand -hex 32)
-
-bash deploy/deploy-cloudrun.sh
-```
-
-### 2.3 Docker Local Build
+### 2.2 Docker Local Build
 
 ```bash
 docker build -t v2ray-platform-control-plane .
@@ -87,6 +50,15 @@ docker run -p 8080:8080 \
   -e BOOTSTRAP_ADMIN_EMAIL=admin@example.com \
   -e BOOTSTRAP_ADMIN_PASSWORD=changeme \
   v2ray-platform-control-plane
+```
+
+### 2.3 Published image
+
+Push to `main` and `.github/workflows/deploy.yml` publishes the control-plane
+image to:
+
+```text
+ghcr.io/<your-github-owner>/v2ray-platform-control-plane
 ```
 
 ## 3. First Login & Basic Configuration
@@ -381,11 +353,10 @@ Node Agent supports auto-update:
 ### 11.3 Update Control Plane
 
 ```bash
-# GitHub Actions method
+# Publish a new control-plane image
 git push origin main
 
-# Manual method
-bash deploy/deploy-cloudrun.sh
+# Or restart your own control-plane runtime after updating the code/image
 ```
 
 ## 12. Environment Variables Reference

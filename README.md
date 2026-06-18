@@ -60,7 +60,7 @@ then run the generated install script on each proxy server to register a node.
 | [docs/node-agent.md](docs/node-agent.md) | Node agent setup, usage stats, auto-update, troubleshooting |
 | [docs/subscription.md](docs/subscription.md) | Clash subscription, tiers, quota, proxy chain |
 | [docs/roadmap.md](docs/roadmap.md) | Planned features |
-| [deploy/README.md](deploy/README.md) | Deployment guide |
+| [deploy/README.md](deploy/README.md) | Packaging and bootstrap guide |
 
 ## Acknowledgements
 
