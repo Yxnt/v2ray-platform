@@ -17,7 +17,7 @@ Independent control plane and node agent for managing V2Ray proxy nodes.
 
 ## Repository layout
 
-```
+```text
 cmd/
   control-plane/
   node-agent/
