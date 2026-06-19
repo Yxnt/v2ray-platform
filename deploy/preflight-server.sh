@@ -6,11 +6,6 @@ set -euo pipefail
 
 required_env=(
   DEPLOY_HOST
-  DEPLOY_PATH
-  CONTROL_PLANE_PUBLIC_URL
-  BOOTSTRAP_ADMIN_EMAIL
-  BOOTSTRAP_ADMIN_PASSWORD
-  CONTROL_PLANE_SESSION_SECRET
 )
 
 required_cmds=(
@@ -19,6 +14,7 @@ required_cmds=(
   tar
   curl
   git
+  openssl
 )
 
 missing=0
@@ -38,15 +34,60 @@ for name in "${required_env[@]}"; do
   fi
 done
 
+if [[ -z "${DEPLOY_PATH:-}" ]]; then
+  echo "auto env: DEPLOY_PATH=/opt/v2ray-platform"
+else
+  echo "ok env: DEPLOY_PATH"
+fi
+
+if [[ -z "${CONTROL_PLANE_PUBLIC_URL:-}" ]]; then
+  host_guess="${DEPLOY_HOST##*@}"
+  host_guess="${host_guess%%:*}"
+  echo "auto env: CONTROL_PLANE_PUBLIC_URL=https://${host_guess}"
+else
+  echo "ok env: CONTROL_PLANE_PUBLIC_URL"
+fi
+
+if [[ -z "${BOOTSTRAP_ADMIN_EMAIL:-}" ]]; then
+  echo "auto env: BOOTSTRAP_ADMIN_EMAIL=admin@local.invalid"
+else
+  echo "ok env: BOOTSTRAP_ADMIN_EMAIL"
+fi
+
+if [[ -z "${BOOTSTRAP_ADMIN_PASSWORD:-}" ]]; then
+  echo "auto env: BOOTSTRAP_ADMIN_PASSWORD=<generated>"
+else
+  echo "ok env: BOOTSTRAP_ADMIN_PASSWORD"
+fi
+
+if [[ -z "${CONTROL_PLANE_SESSION_SECRET:-}" ]]; then
+  echo "auto env: CONTROL_PLANE_SESSION_SECRET=<generated>"
+else
+  echo "ok env: CONTROL_PLANE_SESSION_SECRET"
+fi
+
+if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]]; then
+  echo "auto env: CONTROL_PLANE_ADMIN_TOKEN=<generated>"
+else
+  echo "ok env: CONTROL_PLANE_ADMIN_TOKEN"
+fi
+
 if [[ -z "${DATABASE_URL:-}" ]]; then
-  for name in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD; do
-    if [[ -z "${!name:-}" ]]; then
-      echo "missing env: ${name} (required when DATABASE_URL is not set)" >&2
-      missing=1
-    else
-      echo "ok env: ${name}"
-    fi
-  done
+  if [[ -z "${POSTGRES_DB:-}" ]]; then
+    echo "auto env: POSTGRES_DB=v2ray_platform"
+  else
+    echo "ok env: POSTGRES_DB"
+  fi
+  if [[ -z "${POSTGRES_USER:-}" ]]; then
+    echo "auto env: POSTGRES_USER=v2ray_platform"
+  else
+    echo "ok env: POSTGRES_USER"
+  fi
+  if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
+    echo "auto env: POSTGRES_PASSWORD=<generated>"
+  else
+    echo "ok env: POSTGRES_PASSWORD"
+  fi
 else
   echo "ok env: DATABASE_URL"
 fi

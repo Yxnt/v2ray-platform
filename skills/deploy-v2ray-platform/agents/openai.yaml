@@ -1,0 +1,3 @@
+display_name: Deploy V2Ray Platform
+short_description: Deploy this repo via GHCR plus SSH server by default, with Cloud Run only when explicitly requested.
+default_prompt: Deploy this v2ray-platform project using the repository's standard deployment path.
