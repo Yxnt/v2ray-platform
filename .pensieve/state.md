@@ -2,15 +2,15 @@
 
 ## Lifecycle State
 - Last Event: self-improve
-- Last Note: auto-improve: server-deploy-auto-bootstrap-info
+- Last Note: capture admin UI clipboard fallback pattern for subscription and install links
 
 ## Project Paths
-- Project Root: `/Users/yxn/.codex/worktrees/b0ac/v2ray-platform`
+- Project Root: `/Users/yxn/.codex/worktrees/98a5/v2ray-platform`
 - User Data: `.pensieve/`
 - Runtime State: `.pensieve/.state/`
 
 ## Short-Term
-- Total: 0
+- Total: 1
 - Due for refine: 0 (created 7+ days ago)
 
 ## Graph
