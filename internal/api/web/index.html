@@ -1412,7 +1412,7 @@
         document.querySelector('#install-cmd-pre').textContent = cmd;
         document.querySelector('#install-cmd-output').style.display = 'block';
         document.querySelector('#copy-install-cmd').onclick = () => {
-          navigator.clipboard.writeText(cmd).catch(() => {});
+          copyTextWithFallback(cmd, 'Install command (copy manually):');
         };
         await refreshDashboard();
       } catch (error) {
@@ -1591,6 +1591,19 @@
       URL.revokeObjectURL(url);
     }
 
+    async function copyTextWithFallback(text, promptMessage, onSuccess) {
+      const clipboard = globalThis.navigator?.clipboard;
+      if (clipboard?.writeText) {
+        try {
+          await clipboard.writeText(text);
+          if (typeof onSuccess === 'function') onSuccess();
+          return true;
+        } catch {}
+      }
+      prompt(promptMessage, text);
+      return false;
+    }
+
     document.querySelector('#export-nodes-btn').addEventListener('click', async () => {
       try { await downloadExport('/api/admin/export/nodes?format=csv', 'nodes.csv'); } catch (error) { alert(error.message); }
     });
@@ -1659,13 +1672,11 @@
       const subToken = event.target?.dataset?.memberSub;
       if (subToken !== undefined) {
         const url = `${location.origin}/sub/${subToken}/clash.yaml`;
-        navigator.clipboard.writeText(url).then(() => {
+        await copyTextWithFallback(url, 'Subscription URL (copy manually):', () => {
           const btn = event.target;
           const orig = btn.textContent;
           btn.textContent = 'Copied!';
           setTimeout(() => { btn.textContent = orig; }, 1500);
-        }).catch(() => {
-          prompt('Subscription URL (copy manually):', url);
         });
         return;
       }
@@ -2774,12 +2785,9 @@
       const subToken = event.target?.dataset?.memberSubCf;
       if (!subToken) return;
       const url = `${location.origin}/sub/${subToken}/clash-cf.yaml`;
-      try {
-        await navigator.clipboard.writeText(url);
+      await copyTextWithFallback(url, 'Copy CloudFront subscription URL:', () => {
         toast('CloudFront subscription URL copied');
-      } catch {
-        prompt('Copy CloudFront subscription URL:', url);
-      }
+      });
     });
 
     // CF↓ download click handler

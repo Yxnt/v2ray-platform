@@ -1014,6 +1014,28 @@ func TestCloudFrontAdminUIResetsWizardStateOnDeleteOrMissingConfig(t *testing.T)
 	}
 }
 
+func TestAdminUISubscriptionCopyFallsBackWithoutClipboard(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`async function copyTextWithFallback(text, promptMessage, onSuccess)`,
+		`const clipboard = globalThis.navigator?.clipboard;`,
+		`if (clipboard?.writeText) {`,
+		`prompt(promptMessage, text);`,
+		`await copyTextWithFallback(url, 'Subscription URL (copy manually):', () => {`,
+		`await copyTextWithFallback(url, 'Copy CloudFront subscription URL:', () => {`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected subscription copy UI to contain %q", needle)
+		}
+	}
+}
+
 func TestCloudFrontPlanReadsLiveDistributionState(t *testing.T) {
 	st := store.NewMemoryStore()
 	codec := newCloudFrontTestCodec(t)
