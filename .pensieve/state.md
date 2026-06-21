@@ -1,16 +1,16 @@
 # Pensieve Project State
 
 ## Lifecycle State
-- Last Event: self-improve
-- Last Note: auto-improve: control-plane secret deploy surface
+- Last Event: auto-sync
+- Last Note: refine: promoted short-term knowledge entries
 
 ## Project Paths
-- Project Root: `/Users/yxn/.codex/worktrees/bbcf/v2ray-platform`
+- Project Root: `/Users/yxn/Github/v2ray-platform`
 - User Data: `.pensieve/`
 - Runtime State: `.pensieve/.state/`
 
 ## Short-Term
-- Total: 2
+- Total: 0
 - Due for refine: 0 (created 7+ days ago)
 
 ## Graph
