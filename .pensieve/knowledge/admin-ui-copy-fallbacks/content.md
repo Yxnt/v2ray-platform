@@ -1,5 +1,5 @@
 ---
-id: short-term-knowledge-admin-ui-copy-fallbacks
+id: knowledge-admin-ui-copy-fallbacks
 type: knowledge
 title: Admin UI copy fallbacks for subscription and install links
 status: active
@@ -12,8 +12,8 @@ tags: [admin-ui, clipboard, subscription, cloudfront, debugging]
 
 ## Source
 
-- UI implementation: [/Users/yxn/.codex/worktrees/98a5/v2ray-platform/internal/api/web/index.html](/Users/yxn/.codex/worktrees/98a5/v2ray-platform/internal/api/web/index.html)
-- UI contract test: [/Users/yxn/.codex/worktrees/98a5/v2ray-platform/internal/api/controlplane_test.go](/Users/yxn/.codex/worktrees/98a5/v2ray-platform/internal/api/controlplane_test.go)
+- UI implementation: `internal/api/web/index.html`
+- UI contract test: `internal/api/controlplane_test.go`
 
 ## Summary
 

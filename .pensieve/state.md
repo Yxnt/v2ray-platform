@@ -1,16 +1,16 @@
 # Pensieve Project State
 
 ## Lifecycle State
-- Last Event: self-improve
-- Last Note: capture admin UI clipboard fallback pattern for subscription and install links
+- Last Event: auto-sync
+- Last Note: refine: promoted short-term knowledge entries
 
 ## Project Paths
-- Project Root: `/Users/yxn/.codex/worktrees/98a5/v2ray-platform`
+- Project Root: `/Users/yxn/Github/v2ray-platform`
 - User Data: `.pensieve/`
 - Runtime State: `.pensieve/.state/`
 
 ## Short-Term
-- Total: 1
+- Total: 0
 - Due for refine: 0 (created 7+ days ago)
 
 ## Graph

@@ -4,7 +4,7 @@ Features are listed in recommended implementation order for a self-operated serv
 
 ## 1. Security hardening
 
-- Secret rotation guidance for `CONTROL_PLANE_SESSION_SECRET` and admin credentials
+- Secret rotation guidance for `CONTROL_PLANE_SESSION_SECRET`, `CLOUDFRONT_MASTER_KEY`, and admin credentials
 - HTTPS / reverse-proxy deployment defaults
 - Optional IP allowlist or identity-aware proxy in front of admin UI
 - Optional second admin role (`owner` / `operator`)
