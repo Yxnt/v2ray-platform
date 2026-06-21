@@ -66,6 +66,9 @@ cp deploy/server.env.example /tmp/v2ray-platform-server.env
 - `CONTROL_PLANE_IMAGE`，默认值：`ghcr.io/yxnt/v2ray-platform-control-plane:latest`
 - `POSTGRES_RESTORE_DUMP`，可选，用于首次部署时恢复数据库备份
 
+SSH 服务器部署脚本会在缺省时自动生成 bootstrap 密钥，包括用于加密
+CloudFront AWS 凭证的 `CLOUDFRONT_MASTER_KEY`。
+
 #### 第三步：执行预检和部署
 
 ```bash
@@ -270,6 +273,10 @@ export CONTROL_PLANE_ALERT_WEBHOOK_URL=https://your-webhook-url
 
 ### 8.1 配置 AWS 凭证
 
+CloudFront 凭证存储要求 control-plane 配置 `CLOUDFRONT_MASTER_KEY`。默认
+SSH 服务器部署会把它生成到 `/opt/v2ray-platform/.env.server`；Cloud Run
+部署需要把它作为稳定 secret 提供。
+
 1. 进入 **CloudFront** 标签页
 2. 填写：
    - **Access Key ID**
@@ -410,6 +417,7 @@ git push origin main
 | `BOOTSTRAP_ADMIN_EMAIL` | - | 首次启动创建的管理员邮箱 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | - | 首次启动创建的管理员密码 |
 | `CONTROL_PLANE_SESSION_SECRET` | 自动生成 | 会话签名密钥 |
+| `CLOUDFRONT_MASTER_KEY` | SSH 服务器部署自动生成 | 用于加密已保存 CloudFront AWS 凭证的 32 字符密钥 |
 | `PORT` | 8080 | 监听端口 |
 | `CONTROL_PLANE_NODE_OFFLINE_SECONDS` | 900 | 节点离线判定时间 (秒) |
 

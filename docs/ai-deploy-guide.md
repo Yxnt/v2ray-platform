@@ -99,12 +99,17 @@ deploy flow generate them for you:
 - `BOOTSTRAP_ADMIN_PASSWORD`
 - `CONTROL_PLANE_SESSION_SECRET`
 - `CONTROL_PLANE_ADMIN_TOKEN`
+- `CLOUDFRONT_MASTER_KEY`
 - `POSTGRES_PASSWORD` when `DATABASE_URL` is not set
 - `CONTROL_PLANE_PUBLIC_URL` when it can be derived from `DEPLOY_HOST`
 
 The effective values are written to a server-side file at
 `/opt/v2ray-platform/deploy-info.txt` by default, so the user can review them
 directly on the target host after deploy.
+
+`CLOUDFRONT_MASTER_KEY` protects saved CloudFront AWS credentials. Keep the
+generated value stable after credentials have been saved; replacing it requires
+re-saving CloudFront credentials in the admin UI.
 
 ## Node deployment and cleanup notes
 

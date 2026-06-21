@@ -9,6 +9,7 @@
 | `BOOTSTRAP_ADMIN_PASSWORD` | _(required)_ | Password for the bootstrap admin. |
 | `CONTROL_PLANE_SESSION_SECRET` | _(auto)_ | HMAC secret for signing admin session tokens. Rotate with care — existing sessions are invalidated. |
 | `CONTROL_PLANE_ADMIN_TOKEN` | _(none)_ | Legacy static token fallback (`X-Admin-Token` header). Disabled when unset. |
+| `CLOUDFRONT_MASTER_KEY` | _(auto for SSH deploy)_ | 32-character key used to encrypt stored CloudFront AWS credentials. Keep stable after saving CloudFront credentials; rotating it requires re-saving those credentials. |
 | `PORT` | `8080` | HTTP listen port. |
 
 ## Node Agent

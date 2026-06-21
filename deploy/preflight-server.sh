@@ -72,6 +72,12 @@ else
   echo "ok env: CONTROL_PLANE_ADMIN_TOKEN"
 fi
 
+if [[ -z "${CLOUDFRONT_MASTER_KEY:-}" ]]; then
+  echo "auto env: CLOUDFRONT_MASTER_KEY=<generated>"
+else
+  echo "ok env: CLOUDFRONT_MASTER_KEY"
+fi
+
 if [[ -z "${DATABASE_URL:-}" ]]; then
   if [[ -z "${POSTGRES_DB:-}" ]]; then
     echo "auto env: POSTGRES_DB=v2ray_platform"

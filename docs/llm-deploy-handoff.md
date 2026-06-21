@@ -83,9 +83,18 @@ The server deploy script will:
 5. Pull `CONTROL_PLANE_IMAGE` from GHCR and start the control-plane container.
 6. Verify `GET /healthz` on `CONTROL_PLANE_PUBLIC_URL`.
 
+When omitted, the SSH server deploy script auto-generates `CLOUDFRONT_MASTER_KEY`
+and writes it to `.env.server` and `deploy-info.txt`. Do not rotate that value
+after CloudFront AWS credentials have been saved unless the operator is ready
+to re-save those credentials.
+
 ### Mode C: deploy to Cloud Run only when explicitly requested
 
 Use this only when the user explicitly wants GCP or Cloud Run:
+
+Cloud Run deploys require `CLOUDFRONT_MASTER_KEY` to be set alongside the other
+control-plane secrets. Generate it with `openssl rand -hex 16` and store it as
+a stable secret.
 
 1. `bash deploy/deploy-cloudrun.sh` completed without error in CI logs or your terminal.
 2. `gcloud run services describe "$CLOUDRUN_SERVICE" --region "$GCP_REGION" --project "$GCP_PROJECT"` returns a URL.

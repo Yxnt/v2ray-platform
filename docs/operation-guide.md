@@ -66,6 +66,10 @@ Important variables:
 - `CONTROL_PLANE_IMAGE` default: `ghcr.io/yxnt/v2ray-platform-control-plane:latest`
 - `POSTGRES_RESTORE_DUMP` optional local dump path to restore on first deploy
 
+The SSH server deploy script auto-generates bootstrap secrets when omitted,
+including `CLOUDFRONT_MASTER_KEY` for encrypting saved CloudFront AWS
+credentials.
+
 #### Step 3: Run preflight and deploy
 
 ```bash
@@ -270,6 +274,11 @@ View in **Logs & Alerts** tab:
 
 ### 8.1 Configure AWS Credentials
 
+CloudFront credential storage requires `CLOUDFRONT_MASTER_KEY` on the
+control-plane. Default SSH server deploys generate it in
+`/opt/v2ray-platform/.env.server`; Cloud Run deploys must provide it as a
+stable secret.
+
 1. Go to **CloudFront** tab
 2. Fill in:
    - **Access Key ID**
@@ -410,6 +419,7 @@ git push origin main
 | `BOOTSTRAP_ADMIN_EMAIL` | - | Admin email created on first startup |
 | `BOOTSTRAP_ADMIN_PASSWORD` | - | Admin password created on first startup |
 | `CONTROL_PLANE_SESSION_SECRET` | Auto-generated | Session signing secret |
+| `CLOUDFRONT_MASTER_KEY` | Auto-generated for SSH server deploys | 32-character key for encrypting stored CloudFront AWS credentials |
 | `PORT` | 8080 | Listen port |
 | `CONTROL_PLANE_NODE_OFFLINE_SECONDS` | 900 | Node offline threshold (seconds) |
 

@@ -28,6 +28,7 @@ This is the default real deployment path for this repository.
 - The target host should have SSH access plus `docker` and `docker compose`.
 - The deploy flow uploads the repo, generates `.env.server`, optionally restores `POSTGRES_RESTORE_DUMP`, pulls `CONTROL_PLANE_IMAGE`, and starts services with `deploy/docker-compose.server.yml`.
 - When some bootstrap values are omitted, the deploy flow generates them automatically and records the effective values in the server-side deploy info file.
+- `CLOUDFRONT_MASTER_KEY` is one of the generated bootstrap secrets. Keep it stable after CloudFront AWS credentials have been saved; changing it requires re-saving those credentials.
 - The default image is `ghcr.io/yxnt/v2ray-platform-control-plane`.
 
 ## Node deployment follow-up

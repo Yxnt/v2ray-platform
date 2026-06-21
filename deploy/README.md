@@ -55,6 +55,7 @@ Useful runtime variables for the control plane:
 - `BOOTSTRAP_ADMIN_PASSWORD`
 - `CONTROL_PLANE_SESSION_SECRET`
 - `CONTROL_PLANE_ADMIN_TOKEN`
+- `CLOUDFRONT_MASTER_KEY`
 - `CONTROL_PLANE_ALERT_WEBHOOK_URL`
 - `CONTROL_PLANE_DB_MAX_OPEN_CONNS`
 - `CONTROL_PLANE_DB_MAX_IDLE_CONNS`
@@ -110,6 +111,11 @@ The server deploy script will:
 5. Pull `CONTROL_PLANE_IMAGE` from GHCR and start the control-plane container.
 6. Verify `GET /healthz` on `CONTROL_PLANE_PUBLIC_URL`.
 
+For SSH server deploys, `CLOUDFRONT_MASTER_KEY` is generated automatically when
+omitted and written to `.env.server`. Keep that value stable after CloudFront
+AWS credentials have been saved; rotating it requires re-saving those
+credentials in the admin UI.
+
 ## Deploy to Cloud Run
 
 There are two ways to deploy: **automatic via GitHub Actions** or **manual via script**.
@@ -134,6 +140,7 @@ Push to `main` and the workflow in `.github/workflows/deploy.yml` will:
 | `BOOTSTRAP_ADMIN_EMAIL` | First admin email |
 | `BOOTSTRAP_ADMIN_PASSWORD` | First admin password (rotate after first login) |
 | `CONTROL_PLANE_SESSION_SECRET` | Random 32+ char string (`openssl rand -hex 32`) |
+| `CLOUDFRONT_MASTER_KEY` | Random 32 char string (`openssl rand -hex 16`) |
 | `CONTROL_PLANE_ALERT_WEBHOOK_URL` | _(optional)_ webhook for alerts |
 
 **Repository variables** (Settings → Variables — not secrets):
@@ -171,6 +178,7 @@ export DATABASE_URL='postgres://user:pass@host/db?sslmode=require'
 export BOOTSTRAP_ADMIN_EMAIL=admin@example.com
 export BOOTSTRAP_ADMIN_PASSWORD=changeme
 export CONTROL_PLANE_SESSION_SECRET=$(openssl rand -hex 32)
+export CLOUDFRONT_MASTER_KEY=$(openssl rand -hex 16)
 
 # optional overrides
 export GCP_REGION=asia-east1
