@@ -1270,6 +1270,7 @@
         els.memberUsageBody.appendChild(row);
       }
 
+      window.__allNodesCache = allNodes.items || [];
       fillSelect(els.grantNode, allNodes.items, node => `${node.name} (${node.region})`);
       fillSelect(els.grantMember, allMembers.items, member => `${member.name} <${member.email}>`);
       fillSelect(els.groupGrantGroup, nodeGroups.items, group => group.name);
@@ -2239,8 +2240,9 @@
             <input id="cf-region" placeholder="us-east-1" value="${escapeHtml(cloudFrontWizard.form.region || 'us-east-1')}">
           </div>
           <div class="field">
-            <label for="cf-custom-entry-host">Custom Entry Host <span style="color:var(--text-muted);font-size:11px">(optional)</span></label>
-            <input id="cf-custom-entry-host" placeholder="edge.example.com" value="${escapeHtml(cloudFrontWizard.form.customEntryHost)}">
+            <label for="cf-custom-entry-host">Entrypoint Domain <span style="color:var(--red);font-size:11px">(required)</span></label>
+            <input id="cf-custom-entry-host" placeholder="edge.example.com" value="${escapeHtml(cloudFrontWizard.form.customEntryHost)}" required>
+            <div class="cf-inline-note">CloudFront subscriptions will use this domain as the single entrypoint. Configure the CloudFront alias/DNS before enabling member export.</div>
           </div>
         </div>
       `;
@@ -2517,7 +2519,34 @@
       await loadCloudFrontConfig();
     }
 
+    function isIPAddressHost(host) {
+      const value = String(host || '').trim().replace(/^\[|\]$/g, '');
+      if (!value) return false;
+      if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) {
+        return value.split('.').every((part) => Number(part) >= 0 && Number(part) <= 255);
+      }
+      return value.includes(':') && /^[0-9a-fA-F:.]+$/.test(value);
+    }
+
+    function cloudFrontNodesRegisteredByIP() {
+      const nodes = Array.isArray(window.__allNodesCache) ? window.__allNodesCache : [];
+      return nodes.filter((node) => isIPAddressHost(node.public_host));
+    }
+
+    function requireCloudFrontDomainReadiness() {
+      captureCloudFrontDraftFromDom();
+      if (!cloudFrontWizard.form.customEntryHost.trim()) {
+        throw new Error('Entrypoint domain is required for CloudFront configuration.');
+      }
+      const ipNodes = cloudFrontNodesRegisteredByIP();
+      if (ipNodes.length) {
+        const names = ipNodes.map((node) => `${node.name || node.id} (${node.public_host})`).join(', ');
+        throw new Error(`CloudFront requires node origins registered with domain names. Update these IP-registered nodes first: ${names}`);
+      }
+    }
+
     async function persistCloudFrontPathSettings(overrides = {}) {
+      requireCloudFrontDomainReadiness();
       await saveCloudFrontConfig({
         mode: cloudFrontWizard.form.mode || 'managed',
         customEntryHost: cloudFrontWizard.form.customEntryHost,
@@ -2576,6 +2605,13 @@
     }
 
     function chooseCloudFrontPath(path) {
+      try {
+        requireCloudFrontDomainReadiness();
+      } catch (error) {
+        setCloudFrontError(error.message);
+        toast(error.message, 'error');
+        return;
+      }
       cloudFrontWizard.path = path;
       clearCloudFrontDownstream('target');
       if (path === 'managed') {
