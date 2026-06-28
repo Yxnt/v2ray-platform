@@ -14,19 +14,21 @@ import (
 	"v2ray-platform/internal/store"
 )
 
-var installScriptTmpl = template.Must(template.New("install").Parse(`#!/usr/bin/env bash
+var installScriptTmpl = template.Must(template.New("install").Funcs(template.FuncMap{
+	"shellQuote": shellQuote,
+}).Parse(`#!/usr/bin/env bash
 set -euo pipefail
 
-CONTROL_PLANE_URL="{{.ControlPlaneURL}}"
-BOOTSTRAP_TOKEN="{{.Token}}"
-NODE_NAME="{{.Name}}"
-NODE_REGION="{{.Region}}"
-NODE_PUBLIC_HOST="{{.Host}}"
-NODE_TAGS="{{.Tags}}"
-RUNTIME_FLAVOR="{{.Flavor}}"
+CONTROL_PLANE_URL={{shellQuote .ControlPlaneURL}}
+BOOTSTRAP_TOKEN={{shellQuote .Token}}
+NODE_NAME={{shellQuote .Name}}
+NODE_REGION={{shellQuote .Region}}
+NODE_PUBLIC_HOST={{shellQuote .Host}}
+NODE_TAGS={{shellQuote .Tags}}
+RUNTIME_FLAVOR={{shellQuote .Flavor}}
 V2RAY_INSTALL_DIR="/usr/local/v2ray"
 V2RAY_CONFIG="${V2RAY_INSTALL_DIR}/config.json"
-NODE_USAGE_SOURCE="{{.UsageSource}}"
+NODE_USAGE_SOURCE={{shellQuote .UsageSource}}
 NODE_USAGE_QUERY_SERVER="127.0.0.1:10085"
 NODE_USAGE_QUERY_COMMAND="${V2RAY_INSTALL_DIR}/v2ray api stats --server=127.0.0.1:10085 -json"
 NODE_USAGE_COLLECTION_INTERVAL_SECONDS="600"
@@ -188,6 +190,13 @@ systemctl reload-or-restart nginx
 
 echo "Node '${NODE_NAME}' bootstrap complete."
 `))
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
 
 type installScriptData struct {
 	ControlPlaneURL string
