@@ -3,7 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,6 +108,14 @@ func TestAdminWebUIIsServedWithoutCache(t *testing.T) {
 	}
 }
 
+func storeTestDerivedGroupCredentialUUID(nodeID, memberID string) string {
+	sum := sha256.Sum256([]byte("group-credential:" + nodeID + ":" + memberID))
+	buf := sum[:16]
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
+}
+
 func TestMemberClashYAMLUsesDirectNodeCredentialUUID(t *testing.T) {
 	st := store.NewMemoryStore()
 	_, plainToken, err := st.CreateBootstrapToken(store.CreateBootstrapTokenInput{Description: "node-1", TTLHours: 1})
@@ -174,7 +184,7 @@ func TestMemberClashYAMLUsesDerivedGroupCredentialUUID(t *testing.T) {
 	}
 
 	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
-	expectedUUID := store.DerivedGroupCredentialUUID(reg.NodeID, member.ID)
+	expectedUUID := storeTestDerivedGroupCredentialUUID(reg.NodeID, member.ID)
 	yaml := string(svc.buildMemberClashYAML(member, false, "", ""))
 
 	if !strings.Contains(yaml, `uuid: "`+expectedUUID+`"`) {

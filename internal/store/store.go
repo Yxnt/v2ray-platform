@@ -108,6 +108,7 @@ type Store interface {
 	DeleteNode(nodeID string) error
 	ListMembers() []domain.Member
 	ListGrants() []domain.GrantView
+	ListMemberNodeCredentials(memberID string) []domain.NodeCredential
 	ListNodeSyncEvents(nodeID string, page, limit int) ([]domain.NodeSyncEvent, int64, error)
 	ListNodeUsageSummaries() []domain.NodeUsageSummary
 	ListMemberUsageSummaries() []domain.MemberUsageSummary

@@ -545,30 +545,15 @@ func (svc *ControlPlaneService) handleListMembers(w http.ResponseWriter, r *http
 }
 
 func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMode bool, cfEntryHost, cfCustomHost string) []byte {
-	// Collect all node IDs the member has access to and the node-scoped
-	// VMess credential each node will accept for this member.
+	// Collect the node-scoped VMess credential each accessible node will
+	// accept for this member. Direct credentials come from node_credentials;
+	// group grants are represented by deterministic derived credentials.
 	nodeIDs := map[string]struct{}{}
 	credentialByNodeID := map[string]string{}
-	for _, g := range svc.store.ListGrants() {
-		if g.MemberID == member.ID {
-			nodeIDs[g.NodeID] = struct{}{}
-			if g.CredentialUUID != "" {
-				credentialByNodeID[g.NodeID] = g.CredentialUUID
-			}
-		}
-	}
-	groupIDs := map[string]struct{}{}
-	for _, gg := range svc.store.ListGroupGrantViews() {
-		if gg.MemberID == member.ID {
-			groupIDs[gg.GroupID] = struct{}{}
-		}
-	}
-	for _, m := range svc.store.ListNodeGroupMemberships() {
-		if _, ok := groupIDs[m.GroupID]; ok {
-			nodeIDs[m.NodeID] = struct{}{}
-			if _, hasDirectCredential := credentialByNodeID[m.NodeID]; !hasDirectCredential {
-				credentialByNodeID[m.NodeID] = store.DerivedGroupCredentialUUID(m.NodeID, member.ID)
-			}
+	for _, cred := range svc.store.ListMemberNodeCredentials(member.ID) {
+		nodeIDs[cred.NodeID] = struct{}{}
+		if _, exists := credentialByNodeID[cred.NodeID]; !exists {
+			credentialByNodeID[cred.NodeID] = cred.UUID
 		}
 	}
 

@@ -544,7 +544,7 @@ func TestGroupGrantAppearsInConfigAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	groupCredentialUUID := DerivedGroupCredentialUUID(reg.NodeID, member.ID)
+	groupCredentialUUID := derivedGroupCredentialUUID(reg.NodeID, member.ID)
 	rev, err := s.GetNodeConfig(reg.NodeToken)
 	if err != nil {
 		t.Fatal(err)

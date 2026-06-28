@@ -765,7 +765,7 @@ func (s *MemoryStore) RecordUsage(nodeToken string, snapshots []domain.UsageSnap
 		if memberID == "" {
 			for groupID := range s.nodeGroupNodes[node.ID] {
 				for candidateMemberID := range s.groupGrants[groupID] {
-					if snapshot.CredentialUUID == DerivedGroupCredentialUUID(node.ID, candidateMemberID) {
+					if snapshot.CredentialUUID == derivedGroupCredentialUUID(node.ID, candidateMemberID) {
 						memberID = candidateMemberID
 						break
 					}
@@ -874,13 +874,49 @@ func (s *MemoryStore) ListGrants() []domain.GrantView {
 			view.MemberName = member.Name
 			view.MemberEmail = member.Email
 		}
-		for _, cred := range s.credentials {
-			if cred.AccessGrantID == grant.ID {
-				view.CredentialUUID = cred.UUID
-				break
-			}
-		}
 		out = append(out, view)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out
+}
+
+func (s *MemoryStore) ListMemberNodeCredentials(memberID string) []domain.NodeCredential {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]domain.NodeCredential, 0)
+	seenNodes := map[string]struct{}{}
+	for _, cred := range s.credentials {
+		if cred.MemberID != memberID {
+			continue
+		}
+		out = append(out, *cloneCredential(cred))
+		seenNodes[cred.NodeID] = struct{}{}
+	}
+	for groupID := range s.groupGrants {
+		if _, ok := s.groupGrants[groupID][memberID]; !ok {
+			continue
+		}
+		for nodeID, groups := range s.nodeGroupNodes {
+			if _, ok := groups[groupID]; !ok {
+				continue
+			}
+			if _, hasDirect := seenNodes[nodeID]; hasDirect {
+				continue
+			}
+			out = append(out, domain.NodeCredential{
+				ID:            "derived-" + groupID + "-" + memberID,
+				NodeID:        nodeID,
+				MemberID:      memberID,
+				AccessGrantID: "group:" + groupID,
+				UUID:          derivedGroupCredentialUUID(nodeID, memberID),
+				Email:         credentialEmail(s.members[memberID], nodeID),
+				CreatedAt:     s.groupGrants[groupID][memberID],
+			})
+			seenNodes[nodeID] = struct{}{}
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CreatedAt.Before(out[j].CreatedAt)
@@ -1331,7 +1367,7 @@ func (s *MemoryStore) rebuildNodeConfigLocked(nodeID string) (*domain.ConfigRevi
 				NodeID:        nodeID,
 				MemberID:      memberID,
 				AccessGrantID: "group:" + groupID,
-				UUID:          DerivedGroupCredentialUUID(nodeID, memberID),
+				UUID:          derivedGroupCredentialUUID(nodeID, memberID),
 				Email:         credentialEmail(member, nodeID),
 				CreatedAt:     now,
 			})

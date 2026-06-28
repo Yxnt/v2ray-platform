@@ -1034,7 +1034,7 @@ func (s *PostgresStore) queuePendingMemberCredentialsTx(tx *sql.Tx, table, nodeI
 		return mapPQError(err)
 	}
 	if groupCount > 0 {
-		credentialUUIDs = append(credentialUUIDs, DerivedGroupCredentialUUID(nodeID, memberID))
+		credentialUUIDs = append(credentialUUIDs, derivedGroupCredentialUUID(nodeID, memberID))
 	}
 
 	for _, credentialUUID := range credentialUUIDs {
@@ -1092,7 +1092,7 @@ func (s *PostgresStore) RecordUsage(nodeToken string, snapshots []domain.UsageSn
 					rows.Close()
 					return mapPQError(err)
 				}
-				if snapshot.CredentialUUID == DerivedGroupCredentialUUID(node.ID, candidateMemberID) {
+				if snapshot.CredentialUUID == derivedGroupCredentialUUID(node.ID, candidateMemberID) {
 					resolvedMemberID = candidateMemberID
 					break
 				}
@@ -1197,11 +1197,10 @@ func (s *PostgresStore) ListMembers() []domain.Member {
 
 func (s *PostgresStore) ListGrants() []domain.GrantView {
 	rows, err := s.db.Query(
-		`SELECT g.id, g.node_id, n.name, g.member_id, m.name, m.email, COALESCE(nc.credential_uuid::text, ''), g.created_at
+		`SELECT g.id, g.node_id, n.name, g.member_id, m.name, m.email, g.created_at
 		 FROM member_access_grants g
 		 JOIN nodes n ON n.id = g.node_id
 		 JOIN members m ON m.id = g.member_id
-		 LEFT JOIN node_credentials nc ON nc.access_grant_id = g.id
 		 ORDER BY g.created_at ASC`,
 	)
 	if err != nil {
@@ -1211,9 +1210,46 @@ func (s *PostgresStore) ListGrants() []domain.GrantView {
 	out := make([]domain.GrantView, 0)
 	for rows.Next() {
 		var grant domain.GrantView
-		if err := rows.Scan(&grant.ID, &grant.NodeID, &grant.NodeName, &grant.MemberID, &grant.MemberName, &grant.MemberEmail, &grant.CredentialUUID, &grant.CreatedAt); err == nil {
+		if err := rows.Scan(&grant.ID, &grant.NodeID, &grant.NodeName, &grant.MemberID, &grant.MemberName, &grant.MemberEmail, &grant.CreatedAt); err == nil {
 			out = append(out, grant)
 		}
+	}
+	return out
+}
+
+func (s *PostgresStore) ListMemberNodeCredentials(memberID string) []domain.NodeCredential {
+	rows, err := s.db.Query(
+		`SELECT nc.id, nc.node_id, nc.member_id, nc.access_grant_id, nc.credential_uuid::text, nc.email, nc.created_at
+		 FROM node_credentials nc
+		 WHERE nc.member_id = $1
+		 UNION ALL
+		 SELECT 'derived-' || ngm.group_id || '-' || mg.member_id, ngm.node_id, mg.member_id, 'group:' || ngm.group_id, '', m.email, mg.created_at
+		 FROM node_group_memberships ngm
+		 JOIN member_node_group_grants mg ON mg.group_id = ngm.group_id
+		 JOIN members m ON m.id = mg.member_id
+		 WHERE mg.member_id = $1
+		   AND NOT EXISTS (
+		       SELECT 1 FROM node_credentials nc
+		       WHERE nc.node_id = ngm.node_id AND nc.member_id = mg.member_id
+		   )
+		 ORDER BY created_at ASC`,
+		memberID,
+	)
+	if err != nil {
+		return []domain.NodeCredential{}
+	}
+	defer rows.Close()
+	out := make([]domain.NodeCredential, 0)
+	for rows.Next() {
+		var cred domain.NodeCredential
+		if err := rows.Scan(&cred.ID, &cred.NodeID, &cred.MemberID, &cred.AccessGrantID, &cred.UUID, &cred.Email, &cred.CreatedAt); err != nil {
+			continue
+		}
+		if strings.HasPrefix(cred.AccessGrantID, "group:") {
+			cred.UUID = derivedGroupCredentialUUID(cred.NodeID, cred.MemberID)
+			cred.Email = credentialEmail(&domain.Member{ID: cred.MemberID, Email: cred.Email}, cred.NodeID)
+		}
+		out = append(out, cred)
 	}
 	return out
 }
@@ -1551,7 +1587,7 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 	}
 	// Only include credentials for members that are active and not expired.
 	rows, err := tx.Query(
-		`SELECT nc.id, nc.node_id, nc.member_id, nc.access_grant_id, nc.credential_uuid, nc.email, nc.created_at
+		`SELECT nc.id, nc.node_id, nc.member_id, nc.access_grant_id, nc.credential_uuid::text, nc.email, nc.created_at
 		 FROM node_credentials nc
 		 JOIN members m ON m.id = nc.member_id
 		 WHERE nc.node_id = $1
@@ -1626,7 +1662,7 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 			NodeID:        nodeID,
 			MemberID:      member.ID,
 			AccessGrantID: "group:" + groupID,
-			UUID:          DerivedGroupCredentialUUID(nodeID, member.ID),
+			UUID:          derivedGroupCredentialUUID(nodeID, member.ID),
 			Email:         credentialEmail(&member, nodeID),
 			CreatedAt:     now,
 		})
