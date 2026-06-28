@@ -1792,12 +1792,27 @@
             const agoStr = ago < 60 ? `${ago}s ago` : ago < 3600 ? `${Math.round(ago/60)}m ago` : `${Math.round(ago/3600)}h ago`;
             const icon = s.success ? '✓' : '✗';
             const color = s.success ? 'var(--success, #22863a)' : 'var(--danger, #cb2431)';
-            syncEl.innerHTML = `<span style="color:${color};font-weight:600">${icon} Node applied config v${s.config_version}</span> <span style="color:var(--text-muted)">${agoStr}</span>${s.message ? ` — ${s.message}` : ''}`;
+            const applied = document.createElement('span');
+            applied.style.cssText = `color:${color};font-weight:600`;
+            applied.textContent = `${icon} Node applied config v${s.config_version}`;
+            const occurred = document.createElement('span');
+            occurred.style.color = 'var(--text-muted)';
+            occurred.textContent = agoStr;
+            syncEl.replaceChildren(applied, ' ', occurred);
+            if (s.message) {
+              syncEl.append(' — ', String(s.message));
+            }
             if (s.config_version < data.config_version) {
-              syncEl.innerHTML += ` <span style="color:var(--warning,#d29922);font-weight:600"> ⚠ Pending update to v${data.config_version} (next heartbeat)</span>`;
+              const pending = document.createElement('span');
+              pending.style.cssText = 'color:var(--warning,#d29922);font-weight:600';
+              pending.textContent = ` ⚠ Pending update to v${data.config_version} (next heartbeat)`;
+              syncEl.append(' ', pending);
             }
           } else {
-            syncEl.innerHTML = '<span style="color:var(--text-muted)">No sync events yet — node has not applied this config</span>';
+            const empty = document.createElement('span');
+            empty.style.color = 'var(--text-muted)';
+            empty.textContent = 'No sync events yet — node has not applied this config';
+            syncEl.replaceChildren(empty);
           }
           // render revision history badges
           for (const rev of (revisions || [])) {
