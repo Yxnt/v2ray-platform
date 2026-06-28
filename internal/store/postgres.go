@@ -522,15 +522,6 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 	if err != nil {
 		return nil, mapPQError(err)
 	}
-	// If UUID changed, sync all existing node_credentials for this member.
-	if input.UUID != nil {
-		if _, err = tx.Exec(
-			`UPDATE node_credentials SET credential_uuid = $1 WHERE member_id = $2`,
-			member.UUID, member.ID,
-		); err != nil {
-			return nil, mapPQError(err)
-		}
-	}
 	// Rebuild config for all nodes this member has grants on (direct + group-based).
 	affectedRows, err := tx.Query(
 		`SELECT DISTINCT node_id FROM member_access_grants WHERE member_id = $1
@@ -566,25 +557,15 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 		case domain.MemberStatusActive:
 			// Member restored to active: queue immediate re-add via V2Ray API on next heartbeat.
 			for _, nodeID := range affectedNodes {
-				if _, err := tx.Exec(
-					`INSERT INTO pending_user_additions (node_id, member_uuid, member_email)
-					 VALUES ($1, $2, $3)
-					 ON CONFLICT (node_id, member_uuid) DO NOTHING`,
-					nodeID, member.UUID, member.Email,
-				); err != nil {
-					return nil, mapPQError(err)
+				if err := s.queuePendingMemberCredentialsTx(tx, "pending_user_additions", nodeID, member.ID, member.Email); err != nil {
+					return nil, err
 				}
 			}
 		case domain.MemberStatusSuspended, domain.MemberStatusExpired:
 			// Member suspended/expired: queue immediate removal via V2Ray API on next heartbeat.
 			for _, nodeID := range affectedNodes {
-				if _, err := tx.Exec(
-					`INSERT INTO pending_user_removals (node_id, member_uuid, member_email)
-					 VALUES ($1, $2, $3)
-					 ON CONFLICT (node_id, member_uuid) DO NOTHING`,
-					nodeID, member.UUID, member.Email,
-				); err != nil {
-					return nil, mapPQError(err)
+				if err := s.queuePendingMemberCredentialsTx(tx, "pending_user_removals", nodeID, member.ID, member.Email); err != nil {
+					return nil, err
 				}
 			}
 		}
@@ -610,13 +591,8 @@ func (s *PostgresStore) UpdateMember(memberID string, input UpdateMemberInput) (
 					return nil, mapPQError(err)
 				}
 				for _, nodeID := range affectedNodes {
-					if _, err := tx.Exec(
-						`INSERT INTO pending_user_additions (node_id, member_uuid, member_email)
-						 VALUES ($1, $2, $3)
-						 ON CONFLICT (node_id, member_uuid) DO NOTHING`,
-						nodeID, member.UUID, member.Email,
-					); err != nil {
-						return nil, mapPQError(err)
+					if err := s.queuePendingMemberCredentialsTx(tx, "pending_user_additions", nodeID, member.ID, member.Email); err != nil {
+						return nil, err
 					}
 				}
 			}
@@ -924,7 +900,7 @@ func (s *PostgresStore) CreateGrant(input CreateGrantInput) (*domain.AccessGrant
 		NodeID:        node.ID,
 		MemberID:      member.ID,
 		AccessGrantID: grant.ID,
-		UUID:          member.UUID,
+		UUID:          newUUID(),
 		Email:         credentialEmail(member, node.ID),
 		CreatedAt:     now,
 	}
@@ -1019,6 +995,61 @@ func (s *PostgresStore) DeleteMember(memberID string) error {
 	return tx.Commit()
 }
 
+func (s *PostgresStore) queuePendingMemberCredentialsTx(tx *sql.Tx, table, nodeID, memberID, memberEmail string) error {
+	if table != "pending_user_additions" && table != "pending_user_removals" {
+		return fmt.Errorf("invalid pending credential table %q", table)
+	}
+	credentialUUIDs := make([]string, 0, 2)
+	rows, err := tx.Query(
+		`SELECT credential_uuid
+		 FROM node_credentials
+		 WHERE node_id = $1 AND member_id = $2`,
+		nodeID, memberID,
+	)
+	if err != nil {
+		return mapPQError(err)
+	}
+	for rows.Next() {
+		var credentialUUID string
+		if err := rows.Scan(&credentialUUID); err != nil {
+			rows.Close()
+			return mapPQError(err)
+		}
+		credentialUUIDs = append(credentialUUIDs, credentialUUID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return mapPQError(err)
+	}
+	rows.Close()
+
+	var groupCount int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*)
+		 FROM node_group_memberships ngm
+		 JOIN member_node_group_grants mg ON mg.group_id = ngm.group_id
+		 WHERE ngm.node_id = $1 AND mg.member_id = $2`,
+		nodeID, memberID,
+	).Scan(&groupCount); err != nil {
+		return mapPQError(err)
+	}
+	if groupCount > 0 {
+		credentialUUIDs = append(credentialUUIDs, derivedGroupCredentialUUID(nodeID, memberID))
+	}
+
+	for _, credentialUUID := range credentialUUIDs {
+		if _, err := tx.Exec(
+			fmt.Sprintf(`INSERT INTO %s (node_id, member_uuid, member_email)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (node_id, member_uuid) DO NOTHING`, table),
+			nodeID, credentialUUID, memberEmail,
+		); err != nil {
+			return mapPQError(err)
+		}
+	}
+	return nil
+}
+
 func (s *PostgresStore) RecordUsage(nodeToken string, snapshots []domain.UsageSnapshot) error {
 	node, err := s.findNodeByToken(nodeToken)
 	if err != nil {
@@ -1045,30 +1076,32 @@ func (s *PostgresStore) RecordUsage(nodeToken string, snapshots []domain.UsageSn
 			return mapPQError(err)
 		}
 		if resolvedMemberID == "" {
-			// Fall back: look up by member UUID for group-access credentials.
-			err2 := tx.QueryRow(
+			rows, err2 := tx.Query(
 				`SELECT mg.member_id
 				 FROM node_group_memberships ngm
 				 JOIN member_node_group_grants mg ON mg.group_id = ngm.group_id
-				 JOIN members m ON m.id = mg.member_id
-				 WHERE ngm.node_id = $1 AND m.uuid = $2
-				 LIMIT 1`,
-				node.ID, snapshot.CredentialUUID,
-			).Scan(&resolvedMemberID)
-			if err2 != nil && !errors.Is(err2, sql.ErrNoRows) {
+				 WHERE ngm.node_id = $1`,
+				node.ID,
+			)
+			if err2 != nil {
 				return mapPQError(err2)
 			}
-		}
-		if resolvedMemberID == "" {
-			// Last resort: any member with this UUID (covers direct grants where
-			// node_credentials row may be missing after a manual UUID change).
-			err3 := tx.QueryRow(
-				`SELECT id FROM members WHERE uuid = $1 LIMIT 1`,
-				snapshot.CredentialUUID,
-			).Scan(&resolvedMemberID)
-			if err3 != nil && !errors.Is(err3, sql.ErrNoRows) {
-				return mapPQError(err3)
+			for rows.Next() {
+				var candidateMemberID string
+				if err := rows.Scan(&candidateMemberID); err != nil {
+					rows.Close()
+					return mapPQError(err)
+				}
+				if snapshot.CredentialUUID == derivedGroupCredentialUUID(node.ID, candidateMemberID) {
+					resolvedMemberID = candidateMemberID
+					break
+				}
 			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return mapPQError(err)
+			}
+			rows.Close()
 		}
 		if resolvedMemberID != "" {
 			memberID = resolvedMemberID
@@ -1592,7 +1625,7 @@ func (s *PostgresStore) rebuildNodeConfigTx(tx *sql.Tx, nodeID string) (*domain.
 			NodeID:        nodeID,
 			MemberID:      member.ID,
 			AccessGrantID: "group:" + groupID,
-			UUID:          member.UUID,
+			UUID:          derivedGroupCredentialUUID(nodeID, member.ID),
 			Email:         credentialEmail(&member, nodeID),
 			CreatedAt:     now,
 		})

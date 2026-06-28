@@ -63,6 +63,41 @@ func TestRegisterGrantAndConfigLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemberCredentialsAreIsolatedPerNode(t *testing.T) {
+	s := NewMemoryStore()
+	member, err := s.CreateMember(CreateMemberInput{Name: "Alice", Email: "alice@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, tokenA, err := s.CreateBootstrapToken(CreateBootstrapTokenInput{Description: "node-a", TTLHours: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeA, err := s.RegisterNode(RegisterNodeInput{BootstrapToken: tokenA, Name: "node-a", Region: "a", RuntimeFlavor: "v2ray"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, tokenB, err := s.CreateBootstrapToken(CreateBootstrapTokenInput{Description: "node-b", TTLHours: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeB, err := s.RegisterNode(RegisterNodeInput{BootstrapToken: tokenB, Name: "node-b", Region: "b", RuntimeFlavor: "v2ray"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, credA, err := s.CreateGrant(CreateGrantInput{NodeID: nodeA.NodeID, MemberID: member.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, credB, err := s.CreateGrant(CreateGrantInput{NodeID: nodeB.NodeID, MemberID: member.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credA.UUID == credB.UUID || credA.UUID == member.UUID || credB.UUID == member.UUID {
+		t.Fatalf("expected node-scoped credentials, got member=%s nodeA=%s nodeB=%s", member.UUID, credA.UUID, credB.UUID)
+	}
+}
+
 func TestRevokeGrantAndDeleteMemberLifecycle(t *testing.T) {
 	s := NewMemoryStore()
 
@@ -509,18 +544,20 @@ func TestGroupGrantAppearsInConfigAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The member's UUID is now used directly (same across all nodes).
-	memberUUID := member.UUID
+	groupCredentialUUID := derivedGroupCredentialUUID(reg.NodeID, member.ID)
 	rev, err := s.GetNodeConfig(reg.NodeToken)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(rev.Config, memberUUID) {
-		t.Fatalf("expected member UUID %s in config", memberUUID)
+	if strings.Contains(rev.Config, member.UUID) {
+		t.Fatalf("expected config not to contain member UUID %s", member.UUID)
+	}
+	if !strings.Contains(rev.Config, groupCredentialUUID) {
+		t.Fatalf("expected group credential UUID %s in config", groupCredentialUUID)
 	}
 
 	if err := s.RecordUsage(reg.NodeToken, []domain.UsageSnapshot{{
-		CredentialUUID: memberUUID,
+		CredentialUUID: groupCredentialUUID,
 		UplinkBytes:    100,
 		DownlinkBytes:  200,
 	}}); err != nil {

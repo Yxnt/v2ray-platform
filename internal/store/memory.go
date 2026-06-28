@@ -440,12 +440,6 @@ func (s *MemoryStore) UpdateMember(memberID string, input UpdateMemberInput) (*d
 	}
 	if input.UUID != nil {
 		member.UUID = *input.UUID
-		// Sync all node_credentials for this member.
-		for _, cred := range s.credentials {
-			if cred.MemberID == memberID {
-				cred.UUID = member.UUID
-			}
-		}
 	}
 	if input.TierID != nil {
 		member.TierID = *input.TierID
@@ -693,7 +687,7 @@ func (s *MemoryStore) CreateGrant(input CreateGrantInput) (*domain.AccessGrant, 
 		NodeID:        input.NodeID,
 		MemberID:      input.MemberID,
 		AccessGrantID: grant.ID,
-		UUID:          member.UUID,
+		UUID:          newUUID(),
 		Email:         credentialEmail(member, input.NodeID),
 		CreatedAt:     now,
 	}
@@ -771,7 +765,7 @@ func (s *MemoryStore) RecordUsage(nodeToken string, snapshots []domain.UsageSnap
 		if memberID == "" {
 			for groupID := range s.nodeGroupNodes[node.ID] {
 				for candidateMemberID := range s.groupGrants[groupID] {
-					if m, ok := s.members[candidateMemberID]; ok && m.UUID == snapshot.CredentialUUID {
+					if snapshot.CredentialUUID == derivedGroupCredentialUUID(node.ID, candidateMemberID) {
 						memberID = candidateMemberID
 						break
 					}
@@ -1331,7 +1325,7 @@ func (s *MemoryStore) rebuildNodeConfigLocked(nodeID string) (*domain.ConfigRevi
 				NodeID:        nodeID,
 				MemberID:      memberID,
 				AccessGrantID: "group:" + groupID,
-				UUID:          member.UUID,
+				UUID:          derivedGroupCredentialUUID(nodeID, memberID),
 				Email:         credentialEmail(member, nodeID),
 				CreatedAt:     now,
 			})
