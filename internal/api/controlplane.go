@@ -545,11 +545,16 @@ func (svc *ControlPlaneService) handleListMembers(w http.ResponseWriter, r *http
 }
 
 func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMode bool, cfEntryHost, cfCustomHost string) []byte {
-	// Collect all node IDs the member has access to.
+	// Collect all node IDs the member has access to and the node-scoped
+	// VMess credential each node will accept for this member.
 	nodeIDs := map[string]struct{}{}
+	credentialByNodeID := map[string]string{}
 	for _, g := range svc.store.ListGrants() {
 		if g.MemberID == member.ID {
 			nodeIDs[g.NodeID] = struct{}{}
+			if g.CredentialUUID != "" {
+				credentialByNodeID[g.NodeID] = g.CredentialUUID
+			}
 		}
 	}
 	groupIDs := map[string]struct{}{}
@@ -561,6 +566,9 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMo
 	for _, m := range svc.store.ListNodeGroupMemberships() {
 		if _, ok := groupIDs[m.GroupID]; ok {
 			nodeIDs[m.NodeID] = struct{}{}
+			if _, hasDirectCredential := credentialByNodeID[m.NodeID]; !hasDirectCredential {
+				credentialByNodeID[m.NodeID] = store.DerivedGroupCredentialUUID(m.NodeID, member.ID)
+			}
 		}
 	}
 
@@ -603,10 +611,14 @@ func (svc *ControlPlaneService) buildMemberClashYAML(member *domain.Member, cfMo
 			continue
 		}
 		name := nodeName(&node)
+		credentialUUID := credentialByNodeID[node.ID]
+		if credentialUUID == "" {
+			continue
+		}
 		p := proxy{
 			Name: name,
 			Port: 80,
-			UUID: member.UUID,
+			UUID: credentialUUID,
 		}
 		if cfMode {
 			// CloudFront mode: all traffic goes through the distribution.

@@ -106,6 +106,85 @@ func TestAdminWebUIIsServedWithoutCache(t *testing.T) {
 	}
 }
 
+func TestMemberClashYAMLUsesDirectNodeCredentialUUID(t *testing.T) {
+	st := store.NewMemoryStore()
+	_, plainToken, err := st.CreateBootstrapToken(store.CreateBootstrapTokenInput{Description: "node-1", TTLHours: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := st.RegisterNode(store.RegisterNodeInput{
+		BootstrapToken: plainToken,
+		Name:           "node-1",
+		Region:         "ap-southeast-1",
+		PublicHost:     "node-1.example.com",
+		RuntimeFlavor:  "v2ray",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := st.CreateMember(store.CreateMemberInput{Name: "Alice", Email: "alice@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cred, err := st.CreateGrant(store.CreateGrantInput{NodeID: reg.NodeID, MemberID: member.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	yaml := string(svc.buildMemberClashYAML(member, false, "", ""))
+
+	if !strings.Contains(yaml, `uuid: "`+cred.UUID+`"`) {
+		t.Fatalf("expected Clash YAML to contain node credential UUID %s, got:\n%s", cred.UUID, yaml)
+	}
+	if strings.Contains(yaml, `uuid: "`+member.UUID+`"`) {
+		t.Fatalf("expected Clash YAML not to expose member UUID %s, got:\n%s", member.UUID, yaml)
+	}
+}
+
+func TestMemberClashYAMLUsesDerivedGroupCredentialUUID(t *testing.T) {
+	st := store.NewMemoryStore()
+	_, plainToken, err := st.CreateBootstrapToken(store.CreateBootstrapTokenInput{Description: "node-1", TTLHours: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := st.RegisterNode(store.RegisterNodeInput{
+		BootstrapToken: plainToken,
+		Name:           "node-1",
+		Region:         "ap-southeast-1",
+		PublicHost:     "node-1.example.com",
+		RuntimeFlavor:  "v2ray",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := st.CreateMember(store.CreateMemberInput{Name: "Alice", Email: "alice@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := st.CreateNodeGroup("group-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetNodeGroupsForNode(reg.NodeID, []string{group.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateGroupGrant(group.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	expectedUUID := store.DerivedGroupCredentialUUID(reg.NodeID, member.ID)
+	yaml := string(svc.buildMemberClashYAML(member, false, "", ""))
+
+	if !strings.Contains(yaml, `uuid: "`+expectedUUID+`"`) {
+		t.Fatalf("expected Clash YAML to contain derived group credential UUID %s, got:\n%s", expectedUUID, yaml)
+	}
+	if strings.Contains(yaml, `uuid: "`+member.UUID+`"`) {
+		t.Fatalf("expected Clash YAML not to expose member UUID %s, got:\n%s", member.UUID, yaml)
+	}
+}
+
 func TestPlatformSettingsDefaultUsageCollectionDisabled(t *testing.T) {
 	st := store.NewMemoryStore()
 	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)

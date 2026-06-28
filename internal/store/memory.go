@@ -765,7 +765,7 @@ func (s *MemoryStore) RecordUsage(nodeToken string, snapshots []domain.UsageSnap
 		if memberID == "" {
 			for groupID := range s.nodeGroupNodes[node.ID] {
 				for candidateMemberID := range s.groupGrants[groupID] {
-					if snapshot.CredentialUUID == derivedGroupCredentialUUID(node.ID, candidateMemberID) {
+					if snapshot.CredentialUUID == DerivedGroupCredentialUUID(node.ID, candidateMemberID) {
 						memberID = candidateMemberID
 						break
 					}
@@ -873,6 +873,12 @@ func (s *MemoryStore) ListGrants() []domain.GrantView {
 		if member != nil {
 			view.MemberName = member.Name
 			view.MemberEmail = member.Email
+		}
+		for _, cred := range s.credentials {
+			if cred.AccessGrantID == grant.ID {
+				view.CredentialUUID = cred.UUID
+				break
+			}
 		}
 		out = append(out, view)
 	}
@@ -1325,7 +1331,7 @@ func (s *MemoryStore) rebuildNodeConfigLocked(nodeID string) (*domain.ConfigRevi
 				NodeID:        nodeID,
 				MemberID:      memberID,
 				AccessGrantID: "group:" + groupID,
-				UUID:          derivedGroupCredentialUUID(nodeID, memberID),
+				UUID:          DerivedGroupCredentialUUID(nodeID, memberID),
 				Email:         credentialEmail(member, nodeID),
 				CreatedAt:     now,
 			})

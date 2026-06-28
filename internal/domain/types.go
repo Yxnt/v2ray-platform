@@ -122,13 +122,14 @@ type GroupGrantView struct {
 }
 
 type GrantView struct {
-	ID          string    `json:"id"`
-	NodeID      string    `json:"node_id"`
-	NodeName    string    `json:"node_name"`
-	MemberID    string    `json:"member_id"`
-	MemberName  string    `json:"member_name"`
-	MemberEmail string    `json:"member_email"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	NodeID         string    `json:"node_id"`
+	NodeName       string    `json:"node_name"`
+	MemberID       string    `json:"member_id"`
+	MemberName     string    `json:"member_name"`
+	MemberEmail    string    `json:"member_email"`
+	CredentialUUID string    `json:"credential_uuid"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type NodeCredential struct {

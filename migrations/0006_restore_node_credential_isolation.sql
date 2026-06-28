@@ -9,5 +9,15 @@ WHERE  m.id = nc.member_id
 ALTER TABLE node_credentials
     DROP CONSTRAINT IF EXISTS node_credentials_node_member_unique;
 
-ALTER TABLE node_credentials
-    ADD CONSTRAINT node_credentials_credential_uuid_key UNIQUE (credential_uuid);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'node_credentials_credential_uuid_key'
+          AND conrelid = 'node_credentials'::regclass
+    ) THEN
+        ALTER TABLE node_credentials
+            ADD CONSTRAINT node_credentials_credential_uuid_key UNIQUE (credential_uuid);
+    END IF;
+END $$;

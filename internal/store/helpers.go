@@ -38,7 +38,8 @@ func newUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
 
-func derivedGroupCredentialUUID(nodeID, memberID string) string {
+// DerivedGroupCredentialUUID returns the deterministic node-scoped VMess UUID for a group grant.
+func DerivedGroupCredentialUUID(nodeID, memberID string) string {
 	sum := sha256.Sum256([]byte("group-credential:" + nodeID + ":" + memberID))
 	buf := sum[:16]
 	buf[6] = (buf[6] & 0x0f) | 0x40
