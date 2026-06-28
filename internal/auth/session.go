@@ -101,7 +101,10 @@ func (m *Manager) Verify(token string) (*Claims, error) {
 	if time.Now().UTC().After(claims.ExpiresAt) {
 		return nil, ErrInvalidSession
 	}
-	if claims.SessionID != "" && m.store != nil {
+	if m.store != nil {
+		if claims.SessionID == "" {
+			return nil, ErrInvalidSession
+		}
 		session, err := m.store.GetAdminSession(claims.SessionID)
 		if err != nil {
 			// Transient DB error (e.g. Neon cold-start, connection pool exhaustion).

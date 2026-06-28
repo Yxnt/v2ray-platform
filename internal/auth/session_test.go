@@ -1,6 +1,10 @@
 package auth
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -126,4 +130,31 @@ func TestTransientDBErrorDoesNotCause401(t *testing.T) {
 	if got.Email != "admin@example.com" {
 		t.Fatalf("unexpected email %q", got.Email)
 	}
+}
+
+func TestStoreBackedVerificationRejectsEmptySessionID(t *testing.T) {
+	st := store.NewMemoryStore()
+	manager := NewManager("secret", nil, time.Hour, st)
+	claims := Claims{
+		SessionID: "",
+		AdminID:   "attacker",
+		Email:     "attacker@example.com",
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	}
+	token := signTestToken(t, "secret", claims)
+	if _, err := manager.Verify(token); err == nil {
+		t.Fatal("expected empty session id to fail verification when session store is configured")
+	}
+}
+
+func signTestToken(t *testing.T, secret string, claims Claims) string {
+	t.Helper()
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(encodedPayload))
+	return encodedPayload + "." + base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
