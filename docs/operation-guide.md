@@ -418,7 +418,7 @@ git push origin main
 | `DATABASE_URL` | - | PostgreSQL connection string |
 | `BOOTSTRAP_ADMIN_EMAIL` | - | Admin email created on first startup |
 | `BOOTSTRAP_ADMIN_PASSWORD` | - | Admin password created on first startup |
-| `CONTROL_PLANE_SESSION_SECRET` | Auto-generated | Session signing secret |
+| `CONTROL_PLANE_SESSION_SECRET` | Auto-generated at startup | Session signing secret. Set a stable random value in production; if omitted, restarts invalidate existing sessions. |
 | `CLOUDFRONT_MASTER_KEY` | Auto-generated for SSH server deploys | 32-character key for encrypting stored CloudFront AWS credentials |
 | `PORT` | 8080 | Listen port |
 | `CONTROL_PLANE_NODE_OFFLINE_SECONDS` | 900 | Node offline threshold (seconds) |

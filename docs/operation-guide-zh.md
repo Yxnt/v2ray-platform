@@ -416,7 +416,7 @@ git push origin main
 | `DATABASE_URL` | - | PostgreSQL 连接字符串 |
 | `BOOTSTRAP_ADMIN_EMAIL` | - | 首次启动创建的管理员邮箱 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | - | 首次启动创建的管理员密码 |
-| `CONTROL_PLANE_SESSION_SECRET` | 自动生成 | 会话签名密钥 |
+| `CONTROL_PLANE_SESSION_SECRET` | 启动时自动生成 | 会话签名密钥。生产环境请设置稳定随机值；未设置时重启会使现有会话失效。 |
 | `CLOUDFRONT_MASTER_KEY` | SSH 服务器部署自动生成 | 用于加密已保存 CloudFront AWS 凭证的 32 字符密钥 |
 | `PORT` | 8080 | 监听端口 |
 | `CONTROL_PLANE_NODE_OFFLINE_SECONDS` | 900 | 节点离线判定时间 (秒) |
