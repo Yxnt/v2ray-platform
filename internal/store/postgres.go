@@ -1060,11 +1060,17 @@ func (s *PostgresStore) RecordUsage(nodeToken string, snapshots []domain.UsageSn
 			}
 		}
 		if resolvedMemberID == "" {
-			// Last resort: any member with this UUID (covers direct grants where
-			// node_credentials row may be missing after a manual UUID change).
+			// Last resort: direct-grant fallback for cases where the
+			// node_credentials row is missing after a manual rebuild or credential
+			// rotation. Keep this scoped to the reporting node so a stale or
+			// leaked member UUID cannot be attributed by an unauthorized node.
 			err3 := tx.QueryRow(
-				`SELECT id FROM members WHERE uuid = $1 LIMIT 1`,
-				snapshot.CredentialUUID,
+				`SELECT g.member_id
+				 FROM member_access_grants g
+				 JOIN members m ON m.id = g.member_id
+				 WHERE g.node_id = $1 AND m.uuid = $2
+				 LIMIT 1`,
+				node.ID, snapshot.CredentialUUID,
 			).Scan(&resolvedMemberID)
 			if err3 != nil && !errors.Is(err3, sql.ErrNoRows) {
 				return mapPQError(err3)
