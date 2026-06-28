@@ -144,7 +144,7 @@ func TestInstallScriptUsesPlatformUsageCollectionSetting(t *testing.T) {
 	if disabledRec.Code != http.StatusOK {
 		t.Fatalf("expected 200 for default install script, got %d body=%s", disabledRec.Code, disabledRec.Body.String())
 	}
-	if !strings.Contains(disabledRec.Body.String(), `NODE_USAGE_SOURCE="disabled"`) {
+	if !strings.Contains(disabledRec.Body.String(), `NODE_USAGE_SOURCE='disabled'`) {
 		t.Fatalf("expected default install script to disable usage collection, got %s", disabledRec.Body.String())
 	}
 
@@ -167,8 +167,32 @@ func TestInstallScriptUsesPlatformUsageCollectionSetting(t *testing.T) {
 	if enabledRec.Code != http.StatusOK {
 		t.Fatalf("expected 200 for enabled install script, got %d body=%s", enabledRec.Code, enabledRec.Body.String())
 	}
-	if !strings.Contains(enabledRec.Body.String(), `NODE_USAGE_SOURCE="runtime"`) {
+	if !strings.Contains(enabledRec.Body.String(), `NODE_USAGE_SOURCE='runtime'`) {
 		t.Fatalf("expected enabled install script to use runtime usage collection, got %s", enabledRec.Body.String())
+	}
+}
+
+func TestInstallScriptShellQuotesQueryParameters(t *testing.T) {
+	st := store.NewMemoryStore()
+	svc := NewControlPlaneService(st, auth.NewManager("secret", nil, time.Hour, nil), nil, "memory", "svc", "rev", "", 0)
+	router := NewRouter(config.ControlPlaneConfig{AdminToken: "admin-token"}, svc, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/install.sh?token=tok&name=%24%28id%3E%2Ftmp%2Fpwned%29&region=us%27west&host=h&tags=t&flavor=v2ray", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for install script, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `NODE_NAME="$(id>/tmp/pwned)"`) || strings.Contains(body, `NODE_NAME=$(id>/tmp/pwned)`) {
+		t.Fatalf("expected NODE_NAME to be shell-quoted, got %s", body)
+	}
+	if !strings.Contains(body, `NODE_NAME='$(id>/tmp/pwned)'`) {
+		t.Fatalf("expected command substitution payload to be single-quoted, got %s", body)
+	}
+	if !strings.Contains(body, `NODE_REGION='us'\''west'`) {
+		t.Fatalf("expected single quote in region to be escaped, got %s", body)
 	}
 }
 
