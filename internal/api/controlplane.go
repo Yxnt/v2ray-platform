@@ -1978,6 +1978,10 @@ func (svc *ControlPlaneService) handleCloudFrontScan(w http.ResponseWriter, r *h
 		writeCloudFrontClientError(w, err)
 		return
 	}
+	if !cloudFrontEntryHostConfigured(cfg) {
+		writeError(w, http.StatusBadRequest, errors.New("entrypoint domain is required"))
+		return
+	}
 	scanSvc := cloudfront.NewScanService(svc.store, client)
 	var result *cloudfront.ScanResult
 	if strings.TrimSpace(req.DistributionID) != "" {
@@ -2018,6 +2022,10 @@ func (svc *ControlPlaneService) handleCloudFrontBind(w http.ResponseWriter, r *h
 			writeCloudFrontClientError(w, err)
 			return
 		}
+		if !cloudFrontEntryHostConfigured(cfg) {
+			writeError(w, http.StatusBadRequest, errors.New("entrypoint domain is required"))
+			return
+		}
 		scanSvc := cloudfront.NewScanService(svc.store, client)
 		if _, err := scanSvc.ScanDistributionByID(r.Context(), strings.TrimSpace(req.DistributionID), cfg.Mode); err != nil {
 			writeError(w, http.StatusBadGateway, err)
@@ -2027,6 +2035,10 @@ func (svc *ControlPlaneService) handleCloudFrontBind(w http.ResponseWriter, r *h
 		client, cfg, err := svc.newConfiguredCloudFrontClient()
 		if err != nil {
 			writeCloudFrontClientError(w, err)
+			return
+		}
+		if !cloudFrontEntryHostConfigured(cfg) {
+			writeError(w, http.StatusBadRequest, errors.New("entrypoint domain is required"))
 			return
 		}
 		if strings.TrimSpace(cfg.DistributionID) == "" && strings.TrimSpace(cfg.Mode) == "managed" {
@@ -2091,6 +2103,10 @@ func (svc *ControlPlaneService) handleCloudFrontPlan(w http.ResponseWriter, r *h
 		writeCloudFrontClientError(w, err)
 		return
 	}
+	if !cloudFrontEntryHostConfigured(cfg) {
+		writeError(w, http.StatusBadRequest, errors.New("entrypoint domain is required"))
+		return
+	}
 	if strings.TrimSpace(cfg.DistributionID) == "" {
 		writeError(w, http.StatusBadRequest, errors.New("cloudfront distribution is not bound"))
 		return
@@ -2144,6 +2160,10 @@ func (svc *ControlPlaneService) handleCloudFrontSync(w http.ResponseWriter, r *h
 	client, cfg, err := svc.newConfiguredCloudFrontClient()
 	if err != nil {
 		writeCloudFrontClientError(w, err)
+		return
+	}
+	if !cloudFrontEntryHostConfigured(cfg) {
+		writeError(w, http.StatusBadRequest, errors.New("entrypoint domain is required"))
 		return
 	}
 	if strings.TrimSpace(cfg.DistributionID) == "" {
@@ -2226,6 +2246,10 @@ func cloudFrontDistributionStateFromConfig(cfg *domain.CloudFrontConfig) (*cloud
 	}
 
 	return dist, nil
+}
+
+func cloudFrontEntryHostConfigured(cfg *domain.CloudFrontConfig) bool {
+	return cfg != nil && strings.TrimSpace(cfg.CustomEntryHost) != ""
 }
 
 func (svc *ControlPlaneService) newConfiguredCloudFrontClient() (cloudfront.Client, *domain.CloudFrontConfig, error) {
