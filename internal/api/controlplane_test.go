@@ -936,6 +936,28 @@ func TestCloudFrontAdminUIContainsWizardPathChoice(t *testing.T) {
 	}
 }
 
+func TestCloudFrontAdminUIRequiresEntrypointDomainAndDomainNodeOrigins(t *testing.T) {
+	htmlBytes, err := webAssets.ReadFile("web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+
+	required := []string{
+		`Entrypoint Domain`,
+		`(required)`,
+		`function requireCloudFrontDomainReadiness()`,
+		`Entrypoint domain is required for CloudFront configuration.`,
+		`CloudFront requires node origins registered with domain names.`,
+		`window.__allNodesCache = allNodes.items || [];`,
+	}
+	for _, needle := range required {
+		if !strings.Contains(html, needle) {
+			t.Fatalf("expected CloudFront domain readiness UI to contain %q", needle)
+		}
+	}
+}
+
 func TestCloudFrontAdminUIContainsReviewAndSyncWizardStates(t *testing.T) {
 	htmlBytes, err := webAssets.ReadFile("web/index.html")
 	if err != nil {
@@ -1209,6 +1231,7 @@ func seedEncryptedCloudFrontConfig(t *testing.T, st *store.MemoryStore, codec *c
 		EncryptedAccessKeyID:     encAK,
 		EncryptedSecretAccessKey: encSK,
 		AWSRegion:                "us-east-1",
+		CustomEntryHost:          "edge.example.com",
 		Mode:                     "managed",
 		Enabled:                  &enabled,
 	}); err != nil {
@@ -1253,6 +1276,7 @@ func seedCloudFrontSyncFixture(t *testing.T, st *store.MemoryStore, codec *crypt
 		EncryptedAccessKeyID:     encAK,
 		EncryptedSecretAccessKey: encSK,
 		AWSRegion:                "us-east-1",
+		CustomEntryHost:          "edge.example.com",
 		DistributionID:           "E1234",
 		DistributionDomainName:   "d1234.cloudfront.net",
 		Mode:                     "managed",

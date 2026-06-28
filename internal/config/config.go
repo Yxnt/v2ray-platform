@@ -2,7 +2,7 @@ package config
 
 import (
 	"crypto/rand"
-	"encoding/hex"
+	"encoding/base64"
 	"os"
 	"strconv"
 	"strings"
@@ -65,7 +65,7 @@ func LoadControlPlane() ControlPlaneConfig {
 		ListenAddr:              listenAddr,
 		AdminToken:              os.Getenv("CONTROL_PLANE_ADMIN_TOKEN"),
 		DatabaseURL:             os.Getenv("DATABASE_URL"),
-		SessionSecret:           envOrGeneratedSecret("CONTROL_PLANE_SESSION_SECRET"),
+		SessionSecret:           sessionSecret(),
 		PreviousSessionSecrets:  splitCSV(os.Getenv("CONTROL_PLANE_PREVIOUS_SESSION_SECRETS")),
 		SessionTTL:              time.Duration(mustAtoi(envOr("CONTROL_PLANE_SESSION_TTL_HOURS", "24"))) * time.Hour,
 		BootstrapAdminEmail:     os.Getenv("BOOTSTRAP_ADMIN_EMAIL"),
@@ -117,15 +117,15 @@ func LoadNodeAgent() NodeAgentConfig {
 	}
 }
 
-func envOrGeneratedSecret(key string) string {
-	if value := os.Getenv(key); value != "" {
+func sessionSecret() string {
+	if value := os.Getenv("CONTROL_PLANE_SESSION_SECRET"); value != "" {
 		return value
 	}
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
-		panic("generate session secret: " + err.Error())
+		panic("generate CONTROL_PLANE_SESSION_SECRET: " + err.Error())
 	}
-	return hex.EncodeToString(buf)
+	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
 func envOr(key, fallback string) string {
